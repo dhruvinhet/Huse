@@ -1,0 +1,73 @@
+{
+  "$defs": {
+    "NarrationPhrase": {
+      "additionalProperties": false,
+      "description": "Represent one spoken phrase tied to one storyboard beat.",
+      "properties": {
+        "phrase_id": {
+          "minLength": 1,
+          "title": "Phrase Id",
+          "type": "string"
+        },
+        "beat_id": {
+          "minLength": 1,
+          "title": "Beat Id",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "delivery": {
+          "default": "normal",
+          "enum": [
+            "normal",
+            "emphasis",
+            "pause_before",
+            "pause_after"
+          ],
+          "title": "Delivery",
+          "type": "string"
+        }
+      },
+      "required": [
+        "phrase_id",
+        "beat_id",
+        "text"
+      ],
+      "title": "NarrationPhrase",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Represent ordered narration written from a storyboard.",
+  "properties": {
+    "schema_version": {
+      "const": "2.0",
+      "default": "2.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "title": {
+      "minLength": 1,
+      "title": "Title",
+      "type": "string"
+    },
+    "phrases": {
+      "items": {
+        "$ref": "#/$defs/NarrationPhrase"
+      },
+      "minItems": 1,
+      "title": "Phrases",
+      "type": "array"
+    }
+  },
+  "required": [
+    "title",
+    "phrases"
+  ],
+  "title": "NarrationPlan",
+  "type": "object",
+  "$id": "whiteboard/narration-plan-2.0"
+}

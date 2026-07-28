@@ -1,0 +1,141 @@
+{
+  "$defs": {
+    "PhraseTiming": {
+      "additionalProperties": false,
+      "description": "Represent one measured phrase interval in the narration audio.",
+      "properties": {
+        "phrase_id": {
+          "minLength": 1,
+          "title": "Phrase Id",
+          "type": "string"
+        },
+        "beat_id": {
+          "minLength": 1,
+          "title": "Beat Id",
+          "type": "string"
+        },
+        "audio_start": {
+          "minimum": 0,
+          "title": "Audio Start",
+          "type": "number"
+        },
+        "audio_end": {
+          "exclusiveMinimum": 0,
+          "title": "Audio End",
+          "type": "number"
+        },
+        "confidence": {
+          "default": 1.0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        }
+      },
+      "required": [
+        "phrase_id",
+        "beat_id",
+        "audio_start",
+        "audio_end"
+      ],
+      "title": "PhraseTiming",
+      "type": "object"
+    },
+    "WordTiming": {
+      "additionalProperties": false,
+      "description": "Represent one spoken word aligned to its narration phrase.",
+      "properties": {
+        "phrase_id": {
+          "minLength": 1,
+          "title": "Phrase Id",
+          "type": "string"
+        },
+        "beat_id": {
+          "minLength": 1,
+          "title": "Beat Id",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "audio_start": {
+          "minimum": 0,
+          "title": "Audio Start",
+          "type": "number"
+        },
+        "audio_end": {
+          "exclusiveMinimum": 0,
+          "title": "Audio End",
+          "type": "number"
+        },
+        "confidence": {
+          "default": 1.0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        }
+      },
+      "required": [
+        "phrase_id",
+        "beat_id",
+        "text",
+        "audio_start",
+        "audio_end"
+      ],
+      "title": "WordTiming",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Describe continuous phrase-level timing for one audio track.",
+  "properties": {
+    "schema_version": {
+      "const": "2.0",
+      "default": "2.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "audio_path": {
+      "minLength": 1,
+      "title": "Audio Path",
+      "type": "string"
+    },
+    "duration": {
+      "exclusiveMinimum": 0,
+      "title": "Duration",
+      "type": "number"
+    },
+    "sample_rate": {
+      "exclusiveMinimum": 0,
+      "title": "Sample Rate",
+      "type": "integer"
+    },
+    "phrases": {
+      "items": {
+        "$ref": "#/$defs/PhraseTiming"
+      },
+      "minItems": 1,
+      "title": "Phrases",
+      "type": "array"
+    },
+    "words": {
+      "items": {
+        "$ref": "#/$defs/WordTiming"
+      },
+      "title": "Words",
+      "type": "array"
+    }
+  },
+  "required": [
+    "audio_path",
+    "duration",
+    "sample_rate",
+    "phrases"
+  ],
+  "title": "AlignedAudio",
+  "type": "object",
+  "$id": "whiteboard/aligned-audio-2.0"
+}

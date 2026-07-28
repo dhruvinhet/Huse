@@ -1,0 +1,68 @@
+# Python bytecode and test/tool caches
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments and local package/build output
+.venv/
+venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+client_secret*.json
+service-account*.json
+secrets/
+
+# Generated application artifacts
+outputs/
+temp/
+logs/
+*.log
+*.mp3
+*.wav
+*.m4a
+*.mp4
+*.mov
+*.avi
+
+# Local databases and profiling output
+*.sqlite
+*.sqlite3
+*.db
+*.prof
+*.trace
+
+# Local AI/coding-tool state
+.agents/
+.architectiq/
+.codex/
+.dist/
+.git.incomplete-backup/
+
+# IDE and OS metadata
+.idea/
+.vscode/
+*.code-workspace
+.DS_Store
+Thumbs.db
+Desktop.ini

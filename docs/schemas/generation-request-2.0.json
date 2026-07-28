@@ -1,0 +1,150 @@
+{
+  "$defs": {
+    "AudienceLevel": {
+      "description": "Supported instructional difficulty levels.",
+      "enum": [
+        "beginner",
+        "intermediate",
+        "advanced"
+      ],
+      "title": "AudienceLevel",
+      "type": "string"
+    },
+    "AudienceProfile": {
+      "additionalProperties": false,
+      "description": "Describe assumed knowledge and desired visual complexity.",
+      "properties": {
+        "level": {
+          "$ref": "#/$defs/AudienceLevel",
+          "default": "intermediate"
+        },
+        "assumed_knowledge": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Assumed Knowledge",
+          "type": "array"
+        },
+        "learning_goal": {
+          "minLength": 1,
+          "title": "Learning Goal",
+          "type": "string"
+        },
+        "max_visual_density": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Visual Density"
+        }
+      },
+      "required": [
+        "learning_goal"
+      ],
+      "title": "AudienceProfile",
+      "type": "object"
+    },
+    "OutputProfile": {
+      "additionalProperties": false,
+      "description": "Describe deterministic media output requirements.",
+      "properties": {
+        "width": {
+          "default": 1920,
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "default": 1080,
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "fps": {
+          "default": 30,
+          "exclusiveMinimum": 0,
+          "title": "Fps",
+          "type": "integer"
+        },
+        "format": {
+          "const": "mp4",
+          "default": "mp4",
+          "title": "Format",
+          "type": "string"
+        },
+        "keep_frames": {
+          "default": true,
+          "title": "Keep Frames",
+          "type": "boolean"
+        }
+      },
+      "title": "OutputProfile",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Represent one fully specified V2 generation request.",
+  "properties": {
+    "schema_version": {
+      "const": "2.0",
+      "default": "2.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "run_id": {
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string"
+    },
+    "topic": {
+      "minLength": 1,
+      "title": "Topic",
+      "type": "string"
+    },
+    "target_duration": {
+      "default": 60.0,
+      "exclusiveMinimum": 0,
+      "title": "Target Duration",
+      "type": "number"
+    },
+    "audience": {
+      "$ref": "#/$defs/AudienceProfile"
+    },
+    "style_id": {
+      "default": "whiteboard.default",
+      "minLength": 1,
+      "title": "Style Id",
+      "type": "string"
+    },
+    "language": {
+      "default": "en-US",
+      "minLength": 1,
+      "title": "Language",
+      "type": "string"
+    },
+    "voice": {
+      "default": "en-US-AriaNeural",
+      "minLength": 1,
+      "title": "Voice",
+      "type": "string"
+    },
+    "output": {
+      "$ref": "#/$defs/OutputProfile"
+    }
+  },
+  "required": [
+    "run_id",
+    "topic",
+    "audience"
+  ],
+  "title": "GenerationRequest",
+  "type": "object",
+  "$id": "whiteboard/generation-request-2.0"
+}

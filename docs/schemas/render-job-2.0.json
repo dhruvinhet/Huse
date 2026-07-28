@@ -1,0 +1,939 @@
+{
+  "$defs": {
+    "AssetKind": {
+      "description": "Kinds of semantic assets available to the V2 resolver.",
+      "enum": [
+        "icon",
+        "svg",
+        "line_art",
+        "template",
+        "image"
+      ],
+      "title": "AssetKind",
+      "type": "string"
+    },
+    "AssetQuery": {
+      "additionalProperties": false,
+      "description": "Describe an asset semantically without naming a file.",
+      "properties": {
+        "concept": {
+          "minLength": 1,
+          "title": "Concept",
+          "type": "string"
+        },
+        "asset_kind": {
+          "$ref": "#/$defs/AssetKind"
+        },
+        "style_id": {
+          "minLength": 1,
+          "title": "Style Id",
+          "type": "string"
+        },
+        "required_semantics": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Required Semantics",
+          "type": "array"
+        }
+      },
+      "required": [
+        "concept",
+        "asset_kind",
+        "style_id"
+      ],
+      "title": "AssetQuery",
+      "type": "object"
+    },
+    "AssetSource": {
+      "description": "Provenance of a resolved semantic asset.",
+      "enum": [
+        "template",
+        "catalog",
+        "generated",
+        "legacy"
+      ],
+      "title": "AssetSource",
+      "type": "string"
+    },
+    "CameraCue": {
+      "additionalProperties": false,
+      "description": "Describe one timed camera operation.",
+      "properties": {
+        "cue_id": {
+          "minLength": 1,
+          "title": "Cue Id",
+          "type": "string"
+        },
+        "beat_id": {
+          "minLength": 1,
+          "title": "Beat Id",
+          "type": "string"
+        },
+        "start_time": {
+          "minimum": 0,
+          "title": "Start Time",
+          "type": "number"
+        },
+        "duration": {
+          "exclusiveMinimum": 0,
+          "title": "Duration",
+          "type": "number"
+        },
+        "operation": {
+          "$ref": "#/$defs/CameraOperation"
+        },
+        "target_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Target Ids",
+          "type": "array"
+        },
+        "parameters": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Parameters",
+          "type": "object"
+        }
+      },
+      "required": [
+        "cue_id",
+        "beat_id",
+        "start_time",
+        "duration",
+        "operation"
+      ],
+      "title": "CameraCue",
+      "type": "object"
+    },
+    "CameraOperation": {
+      "description": "Supported virtual camera operations.",
+      "enum": [
+        "fit",
+        "pan",
+        "zoom",
+        "focus",
+        "track",
+        "hold"
+      ],
+      "title": "CameraOperation",
+      "type": "string"
+    },
+    "CameraPlan": {
+      "additionalProperties": false,
+      "description": "Represent the complete virtual-camera timeline.",
+      "properties": {
+        "schema_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "duration": {
+          "exclusiveMinimum": 0,
+          "title": "Duration",
+          "type": "number"
+        },
+        "cues": {
+          "items": {
+            "$ref": "#/$defs/CameraCue"
+          },
+          "title": "Cues",
+          "type": "array"
+        }
+      },
+      "required": [
+        "duration"
+      ],
+      "title": "CameraPlan",
+      "type": "object"
+    },
+    "ConstraintStrength": {
+      "description": "Priority used when resolving competing layout constraints.",
+      "enum": [
+        "required",
+        "strong",
+        "medium",
+        "weak"
+      ],
+      "title": "ConstraintStrength",
+      "type": "string"
+    },
+    "ConstraintType": {
+      "description": "Supported relationships understood by the layout engine.",
+      "enum": [
+        "align",
+        "distribute",
+        "contain",
+        "anchor",
+        "connect",
+        "avoid_overlap",
+        "min_gap",
+        "same_size",
+        "aspect_ratio",
+        "order",
+        "near",
+        "far_from"
+      ],
+      "title": "ConstraintType",
+      "type": "string"
+    },
+    "JsonValue": {},
+    "LaidOutNode": {
+      "additionalProperties": false,
+      "description": "Represent one hierarchical node after layout.",
+      "properties": {
+        "object_id": {
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "kind": {
+          "minLength": 1,
+          "title": "Kind",
+          "type": "string"
+        },
+        "box": {
+          "$ref": "#/$defs/LayoutBox"
+        },
+        "z_index": {
+          "default": 0,
+          "title": "Z Index",
+          "type": "integer"
+        },
+        "children": {
+          "items": {
+            "$ref": "#/$defs/LaidOutNode"
+          },
+          "title": "Children",
+          "type": "array"
+        }
+      },
+      "required": [
+        "object_id",
+        "kind",
+        "box"
+      ],
+      "title": "LaidOutNode",
+      "type": "object"
+    },
+    "LayoutBox": {
+      "additionalProperties": false,
+      "description": "Represent renderer-ready geometry after solving constraints.",
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "number"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "number"
+        },
+        "rotation": {
+          "default": 0.0,
+          "title": "Rotation",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "title": "LayoutBox",
+      "type": "object"
+    },
+    "LayoutConstraint": {
+      "additionalProperties": false,
+      "description": "Express a geometric relationship without pixel coordinates.",
+      "properties": {
+        "constraint_id": {
+          "minLength": 1,
+          "title": "Constraint Id",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/ConstraintType"
+        },
+        "subject_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Subject Ids",
+          "type": "array"
+        },
+        "reference_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference Id"
+        },
+        "strength": {
+          "$ref": "#/$defs/ConstraintStrength",
+          "default": "strong"
+        },
+        "parameters": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Parameters",
+          "type": "object"
+        }
+      },
+      "required": [
+        "constraint_id",
+        "type",
+        "subject_ids"
+      ],
+      "title": "LayoutConstraint",
+      "type": "object"
+    },
+    "LayoutPlan": {
+      "additionalProperties": false,
+      "description": "Represent deterministic geometry for each visual state.",
+      "properties": {
+        "schema_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "viewport": {
+          "$ref": "#/$defs/Viewport"
+        },
+        "state_roots": {
+          "additionalProperties": {
+            "$ref": "#/$defs/LaidOutNode"
+          },
+          "propertyNames": {
+            "minLength": 1
+          },
+          "title": "State Roots",
+          "type": "object"
+        },
+        "diagnostics": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Diagnostics",
+          "type": "array"
+        }
+      },
+      "required": [
+        "viewport",
+        "state_roots"
+      ],
+      "title": "LayoutPlan",
+      "type": "object"
+    },
+    "MotionEvent": {
+      "additionalProperties": false,
+      "description": "Describe one renderer-independent animation event.",
+      "properties": {
+        "event_id": {
+          "minLength": 1,
+          "title": "Event Id",
+          "type": "string"
+        },
+        "beat_id": {
+          "minLength": 1,
+          "title": "Beat Id",
+          "type": "string"
+        },
+        "operation_id": {
+          "minLength": 1,
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "object_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Object Ids",
+          "type": "array"
+        },
+        "strategy": {
+          "minLength": 1,
+          "title": "Strategy",
+          "type": "string"
+        },
+        "start_time": {
+          "minimum": 0,
+          "title": "Start Time",
+          "type": "number"
+        },
+        "duration": {
+          "exclusiveMinimum": 0,
+          "title": "Duration",
+          "type": "number"
+        },
+        "easing": {
+          "default": "ease_in_out",
+          "minLength": 1,
+          "title": "Easing",
+          "type": "string"
+        },
+        "parameters": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Parameters",
+          "type": "object"
+        }
+      },
+      "required": [
+        "event_id",
+        "beat_id",
+        "operation_id",
+        "object_ids",
+        "strategy",
+        "start_time",
+        "duration"
+      ],
+      "title": "MotionEvent",
+      "type": "object"
+    },
+    "MotionPlan": {
+      "additionalProperties": false,
+      "description": "Represent ordered semantic motion events for the full video.",
+      "properties": {
+        "schema_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "duration": {
+          "exclusiveMinimum": 0,
+          "title": "Duration",
+          "type": "number"
+        },
+        "events": {
+          "items": {
+            "$ref": "#/$defs/MotionEvent"
+          },
+          "title": "Events",
+          "type": "array"
+        }
+      },
+      "required": [
+        "duration"
+      ],
+      "title": "MotionPlan",
+      "type": "object"
+    },
+    "ObjectLifecycle": {
+      "description": "Observable lifecycle states for a persistent visual object.",
+      "enum": [
+        "visible",
+        "emphasized",
+        "dimmed",
+        "hidden",
+        "removed"
+      ],
+      "title": "ObjectLifecycle",
+      "type": "string"
+    },
+    "ObjectState": {
+      "additionalProperties": false,
+      "description": "Represent mutable presentation state for one semantic object.",
+      "properties": {
+        "object_id": {
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "kind": {
+          "minLength": 1,
+          "title": "Kind",
+          "type": "string"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/ObjectLifecycle",
+          "default": "visible"
+        },
+        "content": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Content",
+          "type": "object"
+        },
+        "style_token": {
+          "default": "concept.primary",
+          "minLength": 1,
+          "title": "Style Token",
+          "type": "string"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Id"
+        },
+        "child_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Child Ids",
+          "type": "array"
+        },
+        "metadata": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "object_id",
+        "kind"
+      ],
+      "title": "ObjectState",
+      "type": "object"
+    },
+    "ResolvedAssetSet": {
+      "additionalProperties": false,
+      "description": "Group unique resolved assets for a storyboard.",
+      "properties": {
+        "schema_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "assets": {
+          "items": {
+            "$ref": "#/$defs/ResolvedSemanticAsset"
+          },
+          "title": "Assets",
+          "type": "array"
+        }
+      },
+      "title": "ResolvedAssetSet",
+      "type": "object"
+    },
+    "ResolvedSemanticAsset": {
+      "additionalProperties": false,
+      "description": "Describe a ready asset with cache and license provenance.",
+      "properties": {
+        "asset_id": {
+          "minLength": 1,
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "query_digest": {
+          "minLength": 1,
+          "title": "Query Digest",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/AssetSource"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "mime_type": {
+          "minLength": 1,
+          "title": "Mime Type",
+          "type": "string"
+        },
+        "license_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "License Id"
+        },
+        "content_hash": {
+          "minLength": 1,
+          "title": "Content Hash",
+          "type": "string"
+        },
+        "editable": {
+          "title": "Editable",
+          "type": "boolean"
+        },
+        "ready": {
+          "title": "Ready",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "asset_id",
+        "query_digest",
+        "source",
+        "path",
+        "mime_type",
+        "content_hash",
+        "editable",
+        "ready"
+      ],
+      "title": "ResolvedSemanticAsset",
+      "type": "object"
+    },
+    "SceneManifest": {
+      "additionalProperties": false,
+      "description": "Describe one scene's inclusive frames and narration interval.",
+      "properties": {
+        "scene_number": {
+          "minimum": 1,
+          "title": "Scene Number",
+          "type": "integer"
+        },
+        "frame_start": {
+          "minimum": 1,
+          "title": "Frame Start",
+          "type": "integer"
+        },
+        "frame_end": {
+          "minimum": 1,
+          "title": "Frame End",
+          "type": "integer"
+        },
+        "audio_start": {
+          "minimum": 0,
+          "title": "Audio Start",
+          "type": "number"
+        },
+        "audio_end": {
+          "exclusiveMinimum": 0,
+          "title": "Audio End",
+          "type": "number"
+        },
+        "duration": {
+          "exclusiveMinimum": 0,
+          "title": "Duration",
+          "type": "number"
+        }
+      },
+      "required": [
+        "scene_number",
+        "frame_start",
+        "frame_end",
+        "audio_start",
+        "audio_end",
+        "duration"
+      ],
+      "title": "SceneManifest",
+      "type": "object"
+    },
+    "VideoManifest": {
+      "additionalProperties": false,
+      "description": "Describe synchronized timing and frames for the complete video.",
+      "properties": {
+        "fps": {
+          "exclusiveMinimum": 0,
+          "title": "Fps",
+          "type": "integer"
+        },
+        "total_frames": {
+          "minimum": 0,
+          "title": "Total Frames",
+          "type": "integer"
+        },
+        "duration": {
+          "minimum": 0,
+          "title": "Duration",
+          "type": "number"
+        },
+        "scenes": {
+          "items": {
+            "$ref": "#/$defs/SceneManifest"
+          },
+          "title": "Scenes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "fps",
+        "total_frames",
+        "duration",
+        "scenes"
+      ],
+      "title": "VideoManifest",
+      "type": "object"
+    },
+    "Viewport": {
+      "additionalProperties": false,
+      "description": "Describe the available canvas and safe margins.",
+      "properties": {
+        "width": {
+          "default": 1920,
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "default": 1080,
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "margin": {
+          "default": 64,
+          "minimum": 0,
+          "title": "Margin",
+          "type": "integer"
+        }
+      },
+      "title": "Viewport",
+      "type": "object"
+    },
+    "VisualDocument": {
+      "additionalProperties": false,
+      "description": "Represent initial semantic objects and materialized state history.",
+      "properties": {
+        "schema_version": {
+          "const": "2.0",
+          "default": "2.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "document_id": {
+          "minLength": 1,
+          "title": "Document Id",
+          "type": "string"
+        },
+        "initial_objects": {
+          "items": {
+            "$ref": "#/$defs/VisualObjectSpec"
+          },
+          "title": "Initial Objects",
+          "type": "array"
+        },
+        "states": {
+          "items": {
+            "$ref": "#/$defs/VisualState"
+          },
+          "minItems": 1,
+          "title": "States",
+          "type": "array"
+        }
+      },
+      "required": [
+        "document_id",
+        "states"
+      ],
+      "title": "VisualDocument",
+      "type": "object"
+    },
+    "VisualObjectSpec": {
+      "additionalProperties": false,
+      "description": "Describe a semantic object before layout and rendering.",
+      "properties": {
+        "object_id": {
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "kind": {
+          "minLength": 1,
+          "title": "Kind",
+          "type": "string"
+        },
+        "semantic_role": {
+          "minLength": 1,
+          "title": "Semantic Role",
+          "type": "string"
+        },
+        "concept_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Concept Ids",
+          "type": "array"
+        },
+        "content": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Content",
+          "type": "object"
+        },
+        "style_token": {
+          "default": "concept.primary",
+          "minLength": 1,
+          "title": "Style Token",
+          "type": "string"
+        },
+        "asset_query": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AssetQuery"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "children": {
+          "items": {
+            "$ref": "#/$defs/VisualObjectSpec"
+          },
+          "title": "Children",
+          "type": "array"
+        },
+        "constraints": {
+          "items": {
+            "$ref": "#/$defs/LayoutConstraint"
+          },
+          "title": "Constraints",
+          "type": "array"
+        },
+        "accessibility_label": {
+          "minLength": 1,
+          "title": "Accessibility Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "object_id",
+        "kind",
+        "semantic_role",
+        "accessibility_label"
+      ],
+      "title": "VisualObjectSpec",
+      "type": "object"
+    },
+    "VisualState": {
+      "additionalProperties": false,
+      "description": "Represent an immutable checkpoint after applying one visual beat.",
+      "properties": {
+        "state_id": {
+          "minLength": 1,
+          "title": "State Id",
+          "type": "string"
+        },
+        "beat_id": {
+          "minLength": 1,
+          "title": "Beat Id",
+          "type": "string"
+        },
+        "parent_state_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent State Id"
+        },
+        "object_states": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ObjectState"
+          },
+          "propertyNames": {
+            "minLength": 1
+          },
+          "title": "Object States",
+          "type": "object"
+        }
+      },
+      "required": [
+        "state_id",
+        "beat_id",
+        "object_states"
+      ],
+      "title": "VisualState",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Collect validated inputs required by a V2 renderer.",
+  "properties": {
+    "schema_version": {
+      "const": "2.0",
+      "default": "2.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "run_id": {
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string"
+    },
+    "document": {
+      "$ref": "#/$defs/VisualDocument"
+    },
+    "assets": {
+      "$ref": "#/$defs/ResolvedAssetSet"
+    },
+    "layout": {
+      "$ref": "#/$defs/LayoutPlan"
+    },
+    "motion": {
+      "$ref": "#/$defs/MotionPlan"
+    },
+    "camera": {
+      "$ref": "#/$defs/CameraPlan"
+    },
+    "manifest": {
+      "$ref": "#/$defs/VideoManifest"
+    },
+    "output_folder": {
+      "minLength": 1,
+      "title": "Output Folder",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "document",
+    "assets",
+    "layout",
+    "motion",
+    "camera",
+    "manifest",
+    "output_folder"
+  ],
+  "title": "RenderJob",
+  "type": "object",
+  "$id": "whiteboard/render-job-2.0"
+}

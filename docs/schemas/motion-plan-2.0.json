@@ -1,0 +1,102 @@
+{
+  "$defs": {
+    "JsonValue": {},
+    "MotionEvent": {
+      "additionalProperties": false,
+      "description": "Describe one renderer-independent animation event.",
+      "properties": {
+        "event_id": {
+          "minLength": 1,
+          "title": "Event Id",
+          "type": "string"
+        },
+        "beat_id": {
+          "minLength": 1,
+          "title": "Beat Id",
+          "type": "string"
+        },
+        "operation_id": {
+          "minLength": 1,
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "object_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Object Ids",
+          "type": "array"
+        },
+        "strategy": {
+          "minLength": 1,
+          "title": "Strategy",
+          "type": "string"
+        },
+        "start_time": {
+          "minimum": 0,
+          "title": "Start Time",
+          "type": "number"
+        },
+        "duration": {
+          "exclusiveMinimum": 0,
+          "title": "Duration",
+          "type": "number"
+        },
+        "easing": {
+          "default": "ease_in_out",
+          "minLength": 1,
+          "title": "Easing",
+          "type": "string"
+        },
+        "parameters": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Parameters",
+          "type": "object"
+        }
+      },
+      "required": [
+        "event_id",
+        "beat_id",
+        "operation_id",
+        "object_ids",
+        "strategy",
+        "start_time",
+        "duration"
+      ],
+      "title": "MotionEvent",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Represent ordered semantic motion events for the full video.",
+  "properties": {
+    "schema_version": {
+      "const": "2.0",
+      "default": "2.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "duration": {
+      "exclusiveMinimum": 0,
+      "title": "Duration",
+      "type": "number"
+    },
+    "events": {
+      "items": {
+        "$ref": "#/$defs/MotionEvent"
+      },
+      "title": "Events",
+      "type": "array"
+    }
+  },
+  "required": [
+    "duration"
+  ],
+  "title": "MotionPlan",
+  "type": "object",
+  "$id": "whiteboard/motion-plan-2.0"
+}

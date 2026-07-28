@@ -1,0 +1,101 @@
+{
+  "$defs": {
+    "AssetSource": {
+      "description": "Provenance of a resolved semantic asset.",
+      "enum": [
+        "template",
+        "catalog",
+        "generated",
+        "legacy"
+      ],
+      "title": "AssetSource",
+      "type": "string"
+    },
+    "ResolvedSemanticAsset": {
+      "additionalProperties": false,
+      "description": "Describe a ready asset with cache and license provenance.",
+      "properties": {
+        "asset_id": {
+          "minLength": 1,
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "query_digest": {
+          "minLength": 1,
+          "title": "Query Digest",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/AssetSource"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "mime_type": {
+          "minLength": 1,
+          "title": "Mime Type",
+          "type": "string"
+        },
+        "license_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "License Id"
+        },
+        "content_hash": {
+          "minLength": 1,
+          "title": "Content Hash",
+          "type": "string"
+        },
+        "editable": {
+          "title": "Editable",
+          "type": "boolean"
+        },
+        "ready": {
+          "title": "Ready",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "asset_id",
+        "query_digest",
+        "source",
+        "path",
+        "mime_type",
+        "content_hash",
+        "editable",
+        "ready"
+      ],
+      "title": "ResolvedSemanticAsset",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Group unique resolved assets for a storyboard.",
+  "properties": {
+    "schema_version": {
+      "const": "2.0",
+      "default": "2.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "assets": {
+      "items": {
+        "$ref": "#/$defs/ResolvedSemanticAsset"
+      },
+      "title": "Assets",
+      "type": "array"
+    }
+  },
+  "title": "ResolvedAssetSet",
+  "type": "object",
+  "$id": "whiteboard/resolved-assets-2.0"
+}

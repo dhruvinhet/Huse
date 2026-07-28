@@ -1,0 +1,99 @@
+{
+  "$defs": {
+    "CameraCue": {
+      "additionalProperties": false,
+      "description": "Describe one timed camera operation.",
+      "properties": {
+        "cue_id": {
+          "minLength": 1,
+          "title": "Cue Id",
+          "type": "string"
+        },
+        "beat_id": {
+          "minLength": 1,
+          "title": "Beat Id",
+          "type": "string"
+        },
+        "start_time": {
+          "minimum": 0,
+          "title": "Start Time",
+          "type": "number"
+        },
+        "duration": {
+          "exclusiveMinimum": 0,
+          "title": "Duration",
+          "type": "number"
+        },
+        "operation": {
+          "$ref": "#/$defs/CameraOperation"
+        },
+        "target_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Target Ids",
+          "type": "array"
+        },
+        "parameters": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Parameters",
+          "type": "object"
+        }
+      },
+      "required": [
+        "cue_id",
+        "beat_id",
+        "start_time",
+        "duration",
+        "operation"
+      ],
+      "title": "CameraCue",
+      "type": "object"
+    },
+    "CameraOperation": {
+      "description": "Supported virtual camera operations.",
+      "enum": [
+        "fit",
+        "pan",
+        "zoom",
+        "focus",
+        "track",
+        "hold"
+      ],
+      "title": "CameraOperation",
+      "type": "string"
+    },
+    "JsonValue": {}
+  },
+  "additionalProperties": false,
+  "description": "Represent the complete virtual-camera timeline.",
+  "properties": {
+    "schema_version": {
+      "const": "2.0",
+      "default": "2.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "duration": {
+      "exclusiveMinimum": 0,
+      "title": "Duration",
+      "type": "number"
+    },
+    "cues": {
+      "items": {
+        "$ref": "#/$defs/CameraCue"
+      },
+      "title": "Cues",
+      "type": "array"
+    }
+  },
+  "required": [
+    "duration"
+  ],
+  "title": "CameraPlan",
+  "type": "object",
+  "$id": "whiteboard/camera-plan-2.0"
+}

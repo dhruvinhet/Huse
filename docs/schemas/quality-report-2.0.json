@@ -1,0 +1,113 @@
+{
+  "$defs": {
+    "EvaluationDecision": {
+      "description": "Terminal or repair decision returned by an evaluator.",
+      "enum": [
+        "pass",
+        "repair",
+        "fail"
+      ],
+      "title": "EvaluationDecision",
+      "type": "string"
+    },
+    "FindingSeverity": {
+      "description": "Severity assigned to one quality finding.",
+      "enum": [
+        "info",
+        "warning",
+        "error",
+        "fatal"
+      ],
+      "title": "FindingSeverity",
+      "type": "string"
+    },
+    "QualityFinding": {
+      "additionalProperties": false,
+      "description": "Describe one actionable quality defect.",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/FindingSeverity"
+        },
+        "artifact_id": {
+          "minLength": 1,
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "repair_target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repair Target"
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "artifact_id",
+        "message"
+      ],
+      "title": "QualityFinding",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Represent normalized quality scores and the gate decision.",
+  "properties": {
+    "schema_version": {
+      "const": "2.0",
+      "default": "2.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "overall_score": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Overall Score",
+      "type": "number"
+    },
+    "scores": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "propertyNames": {
+        "minLength": 1
+      },
+      "title": "Scores",
+      "type": "object"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/QualityFinding"
+      },
+      "title": "Findings",
+      "type": "array"
+    },
+    "decision": {
+      "$ref": "#/$defs/EvaluationDecision"
+    }
+  },
+  "required": [
+    "overall_score",
+    "scores",
+    "decision"
+  ],
+  "title": "QualityReport",
+  "type": "object",
+  "$id": "whiteboard/quality-report-2.0"
+}

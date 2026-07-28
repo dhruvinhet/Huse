@@ -1,0 +1,143 @@
+{
+  "$defs": {
+    "LaidOutNode": {
+      "additionalProperties": false,
+      "description": "Represent one hierarchical node after layout.",
+      "properties": {
+        "object_id": {
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "kind": {
+          "minLength": 1,
+          "title": "Kind",
+          "type": "string"
+        },
+        "box": {
+          "$ref": "#/$defs/LayoutBox"
+        },
+        "z_index": {
+          "default": 0,
+          "title": "Z Index",
+          "type": "integer"
+        },
+        "children": {
+          "items": {
+            "$ref": "#/$defs/LaidOutNode"
+          },
+          "title": "Children",
+          "type": "array"
+        }
+      },
+      "required": [
+        "object_id",
+        "kind",
+        "box"
+      ],
+      "title": "LaidOutNode",
+      "type": "object"
+    },
+    "LayoutBox": {
+      "additionalProperties": false,
+      "description": "Represent renderer-ready geometry after solving constraints.",
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "number"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "number"
+        },
+        "rotation": {
+          "default": 0.0,
+          "title": "Rotation",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "title": "LayoutBox",
+      "type": "object"
+    },
+    "Viewport": {
+      "additionalProperties": false,
+      "description": "Describe the available canvas and safe margins.",
+      "properties": {
+        "width": {
+          "default": 1920,
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "default": 1080,
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "margin": {
+          "default": 64,
+          "minimum": 0,
+          "title": "Margin",
+          "type": "integer"
+        }
+      },
+      "title": "Viewport",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Represent deterministic geometry for each visual state.",
+  "properties": {
+    "schema_version": {
+      "const": "2.0",
+      "default": "2.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "viewport": {
+      "$ref": "#/$defs/Viewport"
+    },
+    "state_roots": {
+      "additionalProperties": {
+        "$ref": "#/$defs/LaidOutNode"
+      },
+      "propertyNames": {
+        "minLength": 1
+      },
+      "title": "State Roots",
+      "type": "object"
+    },
+    "diagnostics": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Diagnostics",
+      "type": "array"
+    }
+  },
+  "required": [
+    "viewport",
+    "state_roots"
+  ],
+  "title": "LayoutPlan",
+  "type": "object",
+  "$id": "whiteboard/layout-plan-2.0"
+}

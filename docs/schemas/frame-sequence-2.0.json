@@ -1,0 +1,43 @@
+{
+  "additionalProperties": false,
+  "description": "Describe a continuous rendered image sequence.",
+  "properties": {
+    "folder": {
+      "minLength": 1,
+      "title": "Folder",
+      "type": "string"
+    },
+    "pattern": {
+      "default": "frame_%06d.png",
+      "minLength": 1,
+      "title": "Pattern",
+      "type": "string"
+    },
+    "total_frames": {
+      "exclusiveMinimum": 0,
+      "title": "Total Frames",
+      "type": "integer"
+    },
+    "fps": {
+      "exclusiveMinimum": 0,
+      "title": "Fps",
+      "type": "integer"
+    },
+    "sample_paths": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Sample Paths",
+      "type": "array"
+    }
+  },
+  "required": [
+    "folder",
+    "total_frames",
+    "fps"
+  ],
+  "title": "FrameSequence",
+  "type": "object",
+  "$id": "whiteboard/frame-sequence-2.0"
+}

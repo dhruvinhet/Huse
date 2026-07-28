@@ -1,0 +1,13 @@
+fastapi==0.139.2
+pydantic==2.13.4
+python-dotenv==1.2.2
+loguru==0.7.3
+httpx==0.28.1
+opencv-python==5.0.0.93
+Pillow==12.3.0
+edge-tts==7.2.8
+svgwrite==1.4.3
+uvicorn==0.51.0
+pytest==9.1.1
+google-genai==2.13.0
+mutagen==1.48.1

@@ -1,0 +1,47 @@
+{
+  "additionalProperties": false,
+  "description": "Describe one verified final video.",
+  "properties": {
+    "path": {
+      "minLength": 1,
+      "title": "Path",
+      "type": "string"
+    },
+    "duration": {
+      "exclusiveMinimum": 0,
+      "title": "Duration",
+      "type": "number"
+    },
+    "total_frames": {
+      "exclusiveMinimum": 0,
+      "title": "Total Frames",
+      "type": "integer"
+    },
+    "fps": {
+      "exclusiveMinimum": 0,
+      "title": "Fps",
+      "type": "number"
+    },
+    "video_codec": {
+      "minLength": 1,
+      "title": "Video Codec",
+      "type": "string"
+    },
+    "audio_codec": {
+      "minLength": 1,
+      "title": "Audio Codec",
+      "type": "string"
+    }
+  },
+  "required": [
+    "path",
+    "duration",
+    "total_frames",
+    "fps",
+    "video_codec",
+    "audio_codec"
+  ],
+  "title": "VideoArtifact",
+  "type": "object",
+  "$id": "whiteboard/video-artifact-2.0"
+}

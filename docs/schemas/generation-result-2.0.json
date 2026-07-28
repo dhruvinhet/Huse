@@ -1,0 +1,63 @@
+{
+  "$defs": {
+    "PipelineVersion": {
+      "description": "Supported pipeline implementations.",
+      "enum": [
+        "v1",
+        "v2"
+      ],
+      "title": "PipelineVersion",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Describe the terminal output and quality of a V2 run.",
+  "properties": {
+    "schema_version": {
+      "const": "2.0",
+      "default": "2.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "run_id": {
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string"
+    },
+    "output_file": {
+      "minLength": 1,
+      "title": "Output File",
+      "type": "string"
+    },
+    "duration": {
+      "exclusiveMinimum": 0,
+      "title": "Duration",
+      "type": "number"
+    },
+    "total_frames": {
+      "exclusiveMinimum": 0,
+      "title": "Total Frames",
+      "type": "integer"
+    },
+    "quality_score": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Quality Score",
+      "type": "number"
+    },
+    "pipeline_version": {
+      "$ref": "#/$defs/PipelineVersion",
+      "default": "v2"
+    }
+  },
+  "required": [
+    "run_id",
+    "output_file",
+    "duration",
+    "total_frames",
+    "quality_score"
+  ],
+  "title": "GenerationResult",
+  "type": "object",
+  "$id": "whiteboard/generation-result-2.0"
+}

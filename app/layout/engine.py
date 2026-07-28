@@ -1,0 +1,443 @@
+"""Specialized, deterministic layout for semantic educational objects."""
+
+from dataclasses import dataclass, field
+from math import ceil, cos, pi, sin, sqrt
+
+from app.domain.assets import ResolvedAssetSet
+from app.domain.layout import (
+    LaidOutNode,
+    LayoutBox,
+    LayoutPlan,
+    Viewport,
+)
+from app.domain.visual_document import (
+    ObjectLifecycle,
+    ObjectState,
+    VisualDocument,
+    VisualState,
+)
+
+
+@dataclass(slots=True)
+class _MeasuredNode:
+    """Internal relative layout tree before viewport fitting."""
+
+    object_id: str
+    kind: str
+    width: float
+    height: float
+    x: float = 0.0
+    y: float = 0.0
+    children: list["_MeasuredNode"] = field(default_factory=list)
+
+
+class HierarchicalLayoutEngine:
+    """Lay out nested objects without accepting AI pixel coordinates."""
+
+    DEFAULT_GAP = 32.0
+    CONTAINER_PADDING = 48.0
+    TITLE_HEIGHT = 48.0
+
+    def layout(
+        self,
+        document: VisualDocument,
+        assets: ResolvedAssetSet,
+        viewport: Viewport,
+    ) -> LayoutPlan:
+        """Compute deterministic geometry for every immutable state."""
+
+        del assets  # Intrinsic catalog dimensions can be added by asset plugins.
+        roots: dict[str, LaidOutNode] = {}
+        diagnostics: list[str] = []
+        for state in document.states:
+            state_root = self._layout_state(state, viewport)
+            roots[state.state_id] = state_root
+            diagnostics.extend(self._diagnostics(state.state_id, state_root, viewport))
+        return LayoutPlan(
+            viewport=viewport,
+            state_roots=roots,
+            diagnostics=diagnostics,
+        )
+
+    def _layout_state(
+        self,
+        state: VisualState,
+        viewport: Viewport,
+    ) -> LaidOutNode:
+        """Build and fit one synthetic state root."""
+
+        visible_states = {
+            object_id: item
+            for object_id, item in state.object_states.items()
+            if item.lifecycle is not ObjectLifecycle.REMOVED
+        }
+        root_states = [
+            item
+            for item in visible_states.values()
+            if item.parent_id is None or item.parent_id not in visible_states
+        ]
+        root_states.sort(key=lambda item: item.object_id)
+        measured = [self._measure(item, visible_states) for item in root_states]
+        synthetic = self._stack_roots(state.state_id, measured)
+        available_width = viewport.width - 2 * viewport.margin
+        available_height = viewport.height - 2 * viewport.margin
+        scale = min(
+            1.0,
+            available_width / max(1.0, synthetic.width),
+            available_height / max(1.0, synthetic.height),
+        )
+        offset_x = viewport.margin + (available_width - synthetic.width * scale) / 2
+        offset_y = viewport.margin + (available_height - synthetic.height * scale) / 2
+        return self._materialize(
+            synthetic,
+            parent_x=offset_x,
+            parent_y=offset_y,
+            scale=scale,
+            z_index=0,
+        )
+
+    def _measure(
+        self,
+        item: ObjectState,
+        states: dict[str, ObjectState],
+    ) -> _MeasuredNode:
+        """Measure a semantic subtree with a specialized layout algorithm."""
+
+        child_ids = self._ordered_child_ids(item, states)
+        children = [
+            self._measure(states[child_id], states)
+            for child_id in child_ids
+            if child_id in states
+            and states[child_id].lifecycle is not ObjectLifecycle.REMOVED
+        ]
+        if not children:
+            width, height = self._intrinsic_size(item)
+            return _MeasuredNode(item.object_id, item.kind, width, height)
+
+        layout, gap = self._layout_preferences(item)
+        if item.kind == "tree" or layout == "tree":
+            width, height = self._layout_tree(children)
+        elif item.kind == "graph" or layout == "graph":
+            width, height = self._layout_graph(children)
+        elif item.kind == "matrix" or layout == "grid":
+            width, height = self._layout_grid(children, gap)
+        elif layout == "horizontal" or item.kind in {
+            "array",
+            "pipeline",
+            "probability_distribution",
+        }:
+            width, height = self._layout_linear(children, horizontal=True, gap=gap)
+        else:
+            width, height = self._layout_linear(children, horizontal=False, gap=gap)
+
+        width += 2 * self.CONTAINER_PADDING
+        height += 2 * self.CONTAINER_PADDING + self.TITLE_HEIGHT
+        for child in children:
+            child.x += self.CONTAINER_PADDING
+            child.y += self.CONTAINER_PADDING + self.TITLE_HEIGHT
+        return _MeasuredNode(
+            item.object_id,
+            item.kind,
+            max(width, 240.0),
+            max(height, 160.0),
+            children=children,
+        )
+
+    def _intrinsic_size(self, item: ObjectState) -> tuple[float, float]:
+        """Estimate intrinsic size from semantic kind and actual content."""
+
+        label = str(
+            item.content.get("text")
+            or item.content.get("label")
+            or item.content.get("value")
+            or item.metadata.get("accessibility_label", "")
+        )
+        text_width = max(96.0, min(560.0, 28.0 + len(label) * 15.0))
+        sizes = {
+            "label": (text_width, 56.0),
+            "text": (text_width, 64.0),
+            "annotation": (text_width, 56.0),
+            "array_cell": (112.0, 80.0),
+            "matrix_cell": (92.0, 68.0),
+            "component": (max(220.0, text_width), 104.0),
+            "tree_node": (max(112.0, text_width), 76.0),
+            "graph_node": (max(112.0, text_width), 76.0),
+            "connector": (96.0, 24.0),
+            "token_chip": (max(96.0, text_width), 64.0),
+            "equation": (max(220.0, text_width), 84.0),
+            "semantic_asset": (256.0, 256.0),
+        }
+        if item.kind == "histogram_bar":
+            value = float(item.content.get("value", 0.5))
+            return 84.0, 80.0 + 260.0 * max(0.0, min(1.0, value))
+        width, height = sizes.get(item.kind, (max(160.0, text_width), 96.0))
+        hint = item.metadata.get("layout_hint", {})
+        if isinstance(hint, dict):
+            scale = hint.get("scale", 1.0)
+            if isinstance(scale, (int, float)):
+                resolved_scale = max(0.25, min(4.0, float(scale)))
+                width *= resolved_scale
+                height *= resolved_scale
+            size_class = hint.get("size_class")
+            size_factors = {"small": 0.75, "medium": 1.0, "large": 1.4}
+            if isinstance(size_class, str) and size_class in size_factors:
+                width *= size_factors[size_class]
+                height *= size_factors[size_class]
+        return width, height
+
+    def _layout_linear(
+        self,
+        children: list[_MeasuredNode],
+        horizontal: bool,
+        gap: float | None = None,
+    ) -> tuple[float, float]:
+        """Lay out children along one axis with stable spacing."""
+
+        resolved_gap = self.DEFAULT_GAP if gap is None else max(0.0, gap)
+        if horizontal:
+            cursor = 0.0
+            max_height = 0.0
+            for child in children:
+                child.x = cursor
+                child.y = 0.0
+                cursor += child.width + resolved_gap
+                max_height = max(max_height, child.height)
+            for child in children:
+                child.y = (max_height - child.height) / 2
+            return max(0.0, cursor - resolved_gap), max_height
+
+        cursor = 0.0
+        max_width = 0.0
+        for child in children:
+            child.x = 0.0
+            child.y = cursor
+            cursor += child.height + resolved_gap
+            max_width = max(max_width, child.width)
+        for child in children:
+            child.x = (max_width - child.width) / 2
+        return max_width, max(0.0, cursor - resolved_gap)
+
+    def _layout_grid(
+        self,
+        children: list[_MeasuredNode],
+        gap: float | None = None,
+    ) -> tuple[float, float]:
+        """Lay out children in a near-square deterministic grid."""
+
+        columns = max(1, ceil(sqrt(len(children))))
+        resolved_gap = self.DEFAULT_GAP if gap is None else max(0.0, gap)
+        cell_width = max(child.width for child in children)
+        cell_height = max(child.height for child in children)
+        rows = ceil(len(children) / columns)
+        for index, child in enumerate(children):
+            row, column = divmod(index, columns)
+            child.x = column * (cell_width + resolved_gap)
+            child.y = row * (cell_height + resolved_gap)
+        return (
+            columns * cell_width + max(0, columns - 1) * resolved_gap,
+            rows * cell_height + max(0, rows - 1) * resolved_gap,
+        )
+
+    def _layout_tree(self, children: list[_MeasuredNode]) -> tuple[float, float]:
+        """Lay out level-order tree nodes by depth."""
+
+        node_children = [child for child in children if child.kind != "connector"]
+        if not node_children:
+            return self._layout_linear(children, horizontal=True)
+        max_width = max(child.width for child in node_children)
+        max_height = max(child.height for child in node_children)
+        levels = ceil((len(node_children) + 1).bit_length())
+        canvas_width = max_width * max(1, 2 ** (levels - 1))
+        for index, child in enumerate(node_children):
+            depth = (index + 1).bit_length() - 1
+            index_in_level = index - (2**depth - 1)
+            count = 2**depth
+            slot = canvas_width / count
+            child.x = index_in_level * slot + (slot - child.width) / 2
+            child.y = depth * (max_height + 72.0)
+        height = levels * max_height + max(0, levels - 1) * 72.0
+        return canvas_width, height
+
+    def _layout_graph(self, children: list[_MeasuredNode]) -> tuple[float, float]:
+        """Lay out graph vertices on a circle and retain connector overlays."""
+
+        nodes = [child for child in children if child.kind != "connector"]
+        connectors = [child for child in children if child.kind == "connector"]
+        if not nodes:
+            return self._layout_linear(children, horizontal=True)
+        radius = max(180.0, 70.0 * len(nodes))
+        center = radius + max(child.width for child in nodes) / 2
+        for index, child in enumerate(nodes):
+            angle = -pi / 2 + 2 * pi * index / len(nodes)
+            child.x = center + radius * cos(angle) - child.width / 2
+            child.y = center + radius * sin(angle) - child.height / 2
+        for connector in connectors:
+            connector.x = center - connector.width / 2
+            connector.y = center - connector.height / 2
+        extent = 2 * center
+        return extent, extent
+
+    def _stack_roots(
+        self,
+        state_id: str,
+        roots: list[_MeasuredNode],
+    ) -> _MeasuredNode:
+        """Arrange multiple top-level objects as one stable scene document."""
+
+        if not roots:
+            return _MeasuredNode(f"{state_id}_root", "document", 1.0, 1.0)
+        width, height = self._layout_linear(roots, horizontal=len(roots) <= 3)
+        return _MeasuredNode(
+            f"{state_id}_root",
+            "document",
+            width,
+            height,
+            children=roots,
+        )
+
+    def _materialize(
+        self,
+        node: _MeasuredNode,
+        parent_x: float,
+        parent_y: float,
+        scale: float,
+        z_index: int,
+    ) -> LaidOutNode:
+        """Convert relative measured geometry to absolute viewport geometry."""
+
+        absolute_x = parent_x + node.x * scale
+        absolute_y = parent_y + node.y * scale
+        children = [
+            self._materialize(
+                child,
+                absolute_x,
+                absolute_y,
+                scale,
+                z_index + index + 1,
+            )
+            for index, child in enumerate(node.children)
+        ]
+        return LaidOutNode(
+            object_id=node.object_id,
+            kind=node.kind,
+            box=LayoutBox(
+                x=absolute_x,
+                y=absolute_y,
+                width=max(1.0, node.width * scale),
+                height=max(1.0, node.height * scale),
+            ),
+            z_index=z_index,
+            children=children,
+        )
+
+    def _diagnostics(
+        self,
+        state_id: str,
+        root: LaidOutNode,
+        viewport: Viewport,
+    ) -> list[str]:
+        """Report viewport violations that should be impossible after fitting."""
+
+        diagnostics: list[str] = []
+        for node in self._flatten(root):
+            box = node.box
+            if (
+                box.x < -1e-6
+                or box.y < -1e-6
+                or box.x + box.width > viewport.width + 1e-6
+                or box.y + box.height > viewport.height + 1e-6
+            ):
+                diagnostics.append(
+                    f"{state_id}: object {node.object_id} exceeds viewport"
+                )
+            drawable_children = [
+                child
+                for child in node.children
+                if child.kind != "connector"
+            ]
+            for index, first in enumerate(drawable_children):
+                for second in drawable_children[index + 1:]:
+                    if self._overlap(first.box, second.box):
+                        diagnostics.append(
+                            f"{state_id}: sibling objects {first.object_id} and "
+                            f"{second.object_id} overlap"
+                        )
+        return diagnostics
+
+    @staticmethod
+    def _overlap(first: LayoutBox, second: LayoutBox) -> bool:
+        """Return whether two boxes have a positive-area intersection."""
+
+        return not (
+            first.x + first.width <= second.x
+            or second.x + second.width <= first.x
+            or first.y + first.height <= second.y
+            or second.y + second.height <= first.y
+        )
+
+    def _layout_preferences(self, item: ObjectState) -> tuple[str, float]:
+        """Resolve declarative distribution and minimum-gap constraints."""
+
+        layout = str(item.content.get("layout", "vertical"))
+        gap = self.DEFAULT_GAP
+        raw_constraints = item.metadata.get("constraints", [])
+        if not isinstance(raw_constraints, list):
+            return layout, gap
+        for raw in raw_constraints:
+            if not isinstance(raw, dict):
+                continue
+            parameters = raw.get("parameters", {})
+            if not isinstance(parameters, dict):
+                parameters = {}
+            if raw.get("type") == "distribute":
+                axis = parameters.get("axis")
+                if isinstance(axis, str) and axis in {
+                    "horizontal", "vertical", "grid", "tree", "graph"
+                }:
+                    layout = axis
+            if raw.get("type") in {"distribute", "min_gap"}:
+                value = parameters.get("gap")
+                if isinstance(value, (int, float)):
+                    gap = max(gap, float(value))
+        return layout, gap
+
+    def _ordered_child_ids(
+        self,
+        item: ObjectState,
+        states: dict[str, ObjectState],
+    ) -> list[str]:
+        """Apply declarative ordering and relative layout hints."""
+
+        child_ids = list(item.child_ids)
+        raw_constraints = item.metadata.get("constraints", [])
+        if isinstance(raw_constraints, list):
+            for raw in raw_constraints:
+                if not isinstance(raw, dict) or raw.get("type") != "order":
+                    continue
+                subjects = raw.get("subject_ids")
+                if not isinstance(subjects, list):
+                    continue
+                ordered = [value for value in subjects if value in child_ids]
+                child_ids = ordered + [value for value in child_ids if value not in ordered]
+        for child_id in list(child_ids):
+            child = states.get(child_id)
+            hint = child.metadata.get("layout_hint", {}) if child else {}
+            if not isinstance(hint, dict):
+                continue
+            before_id = hint.get("before_id")
+            after_id = hint.get("after_id")
+            if isinstance(before_id, str) and before_id in child_ids:
+                child_ids.remove(child_id)
+                child_ids.insert(child_ids.index(before_id), child_id)
+            elif isinstance(after_id, str) and after_id in child_ids:
+                child_ids.remove(child_id)
+                child_ids.insert(child_ids.index(after_id) + 1, child_id)
+        return child_ids
+
+    def _flatten(self, root: LaidOutNode) -> list[LaidOutNode]:
+        """Return a hierarchy in pre-order."""
+
+        result = [root]
+        for child in root.children:
+            result.extend(self._flatten(child))
+        return result
