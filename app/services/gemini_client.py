@@ -1,4 +1,4 @@
-"""Reusable text-generation client for the Gemini API."""
+"""Provider-aware text-generation client for Gemini and NVIDIA APIs."""
 
 import httpx
 from google import genai
@@ -34,12 +34,52 @@ class GeminiEmptyResponseError(GeminiClientError):
 
 
 class GeminiClient:
-    """Provide a minimal, reusable interface to Gemini text generation."""
+    """Provide a shared text-generation interface for the configured provider.
 
-    MODEL_NAME = "gemini-3.5-flash"
+    The historical class name is retained because the rest of the application
+    injects ``GeminiClient``. The actual provider is selected with
+    ``AI_PROVIDER=gemini`` or ``AI_PROVIDER=nvidia`` in ``.env``.
+    """
+
+    _DEFAULT_PROVIDER = "gemini"
+    _NVIDIA_PROVIDER_NAMES = {"nvidia", "nvidea"}
+
+    @property
+    def PROVIDER(self) -> str:
+        """Return the normalized provider name used by this client."""
+
+        configured_provider = getattr(
+            settings, "AI_PROVIDER", self._DEFAULT_PROVIDER
+        ).strip().lower()
+        if configured_provider == "nvidea":
+            return "nvidia"
+        return configured_provider
+
+    @property
+    def MODEL_NAME(self) -> str:
+        if self.PROVIDER == "nvidia":
+            return getattr(
+                settings, "NVIDIA_MODEL", "meta/llama-3.3-70b-instruct"
+            )
+        return settings.GEMINI_MODEL
+
 
     def __init__(self) -> None:
-        """Validate configuration and initialize one SDK client instance."""
+        """Validate configuration and initialize the selected client."""
+
+        if self.PROVIDER not in {"gemini", "nvidia"}:
+            raise GeminiConfigurationError(
+                "AI_PROVIDER must be 'gemini' or 'nvidia'."
+            )
+
+        if self.PROVIDER == "nvidia":
+            api_key = getattr(settings, "NVIDIA_API_KEY", "").strip()
+            if not api_key:
+                raise GeminiConfigurationError(
+                    "NVIDIA_API_KEY is missing; set it in the environment or .env file."
+                )
+            self._client = None
+            return
 
         api_key = settings.GEMINI_API_KEY.strip()
         if not api_key:
@@ -47,14 +87,9 @@ class GeminiClient:
                 "GEMINI_API_KEY is missing; set it in the environment or .env file."
             )
 
-        timeout_milliseconds = (
-            int(settings.GEMINI_TIMEOUT_SECONDS * 1_000)
-            if settings.GEMINI_TIMEOUT_SECONDS is not None
-            else None
-        )
         self._client = genai.Client(
             api_key=api_key,
-            http_options=types.HttpOptions(timeout=timeout_milliseconds),
+            http_options=types.HttpOptions(timeout=None),
         )
 
     def generate_text(self, prompt: str, temperature: float = 0.3) -> str:
@@ -64,11 +99,20 @@ class GeminiClient:
             raise ValueError("prompt must not be empty")
 
         logger.info(
-            "Sending Gemini request (model={}, prompt_characters={})",
+            "Sending {} request (model={}, prompt_characters={})",
+            self.PROVIDER,
             self.MODEL_NAME,
             len(prompt),
         )
-        logger.debug("Gemini request prompt: {}", prompt)
+        logger.debug("{} request prompt: {}", self.PROVIDER, prompt)
+
+        if self.PROVIDER == "nvidia":
+            return self._generate_nvidia(prompt, temperature)
+
+        return self._generate_gemini(prompt, temperature)
+
+    def _generate_gemini(self, prompt: str, temperature: float) -> str:
+        """Generate text through the Google GenAI SDK."""
 
         try:
             response = self._client.models.generate_content(
@@ -102,3 +146,90 @@ class GeminiClient:
         )
         logger.debug("Gemini response text: {}", stripped_text)
         return stripped_text
+
+    def _generate_nvidia(self, prompt: str, temperature: float) -> str:
+        """Generate text through NVIDIA's OpenAI-compatible endpoint."""
+
+        base_url = getattr(
+            settings,
+            "NVIDIA_BASE_URL",
+            "https://integrate.api.nvidia.com/v1",
+        ).rstrip("/")
+        payload = {
+            "model": self.MODEL_NAME,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+            "max_tokens": getattr(settings, "NVIDIA_MAX_TOKENS", 16384),
+            "stream": False,
+        }
+        if self.MODEL_NAME == "nvidia/nemotron-3-nano-30b-a3b":
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
+        headers = {
+            "Authorization": f"Bearer {settings.NVIDIA_API_KEY}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            response = httpx.post(
+                f"{base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=None,
+            )
+            response.raise_for_status()
+            response_payload = response.json()
+        except httpx.TimeoutException as exc:
+            logger.error("NVIDIA request timed out: {}", exc)
+            raise GeminiTimeoutError("NVIDIA request timed out.") from exc
+        except httpx.NetworkError as exc:
+            logger.error("NVIDIA network request failed: {}", exc)
+            raise GeminiNetworkError(
+                "NVIDIA could not be reached due to a network failure."
+            ) from exc
+        except httpx.HTTPError as exc:
+            logger.error("NVIDIA API request failed: {}", exc)
+            raise GeminiAPIError(f"NVIDIA API request failed: {exc}") from exc
+        except ValueError as exc:
+            logger.error("NVIDIA returned invalid JSON: {}", exc)
+            raise GeminiAPIError("NVIDIA returned an invalid JSON response.") from exc
+
+        response_text = _extract_nvidia_response_text(response_payload)
+        if not response_text:
+            logger.error("NVIDIA returned an empty text response.")
+            raise GeminiEmptyResponseError("NVIDIA returned an empty text response.")
+
+        stripped_text = response_text.strip()
+        logger.info(
+            "NVIDIA response received (characters={})",
+            len(stripped_text),
+        )
+        logger.debug("NVIDIA response text: {}", stripped_text)
+        return stripped_text
+
+
+def _extract_nvidia_response_text(payload: object) -> str:
+    """Extract text from a standard NVIDIA/OpenAI chat-completion payload."""
+
+    if not isinstance(payload, dict):
+        return ""
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return ""
+    message = first_choice.get("message")
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text_parts = [
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        ]
+        return "".join(text_parts)
+    return ""

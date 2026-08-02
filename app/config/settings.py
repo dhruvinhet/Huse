@@ -16,38 +16,45 @@ class Settings(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    AI_PROVIDER: str
     GEMINI_API_KEY: str
+    GEMINI_MODEL: str
+    NVIDIA_API_KEY: str
+    NVIDIA_MODEL: str
+    NVIDIA_VISION_MODEL: str
+    NVIDIA_BASE_URL: str
+    NVIDIA_MAX_TOKENS: int
     OUTPUT_DIR: Path
     TEMP_DIR: Path
     LOG_LEVEL: str
-    GEMINI_TIMEOUT_SECONDS: float | None
     FFMPEG_PATH: Path | None
     DEBUG_ARTIFACTS: bool
     DEBUG_DIR: Path
     PIPELINE_VERSION: str
     V2_MAX_REPAIR_ATTEMPTS: int
     V2_ENABLE_MULTIMODAL: bool
-
-
-def _parse_optional_timeout(value: str | None) -> float | None:
-    """Return seconds, or None when the API request deadline is disabled."""
-
-    if value is None or value.strip().lower() in {"", "none", "unlimited", "0"}:
-        return None
-    timeout = float(value)
-    if timeout < 0:
-        raise ValueError("GEMINI_TIMEOUT_SECONDS cannot be negative")
-    return timeout
+    SUPABASE_URL: str
+    SUPABASE_SECRET_KEY: str
 
 
 settings = Settings(
+    AI_PROVIDER=getenv("AI_PROVIDER", "gemini").strip().lower(),
     GEMINI_API_KEY=getenv("GEMINI_API_KEY", ""),
+    GEMINI_MODEL=getenv("GEMINI_MODEL", "gemini-3.5-flash").strip(),
+    NVIDIA_API_KEY=getenv("NVIDIA_API_KEY", "").strip(),
+    NVIDIA_MODEL=getenv(
+        "NVIDIA_MODEL", "meta/llama-3.3-70b-instruct"
+    ).strip(),
+    NVIDIA_VISION_MODEL=getenv(
+        "NVIDIA_VISION_MODEL", "google/gemma-3n-e4b-it"
+    ).strip(),
+    NVIDIA_BASE_URL=getenv(
+        "NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"
+    ).strip().rstrip("/"),
+    NVIDIA_MAX_TOKENS=getenv("NVIDIA_MAX_TOKENS", "16384"),
     OUTPUT_DIR=Path(getenv("OUTPUT_DIR", "outputs")),
     TEMP_DIR=Path(getenv("TEMP_DIR", "temp")),
     LOG_LEVEL=getenv("LOG_LEVEL", "INFO"),
-    GEMINI_TIMEOUT_SECONDS=_parse_optional_timeout(
-        getenv("GEMINI_TIMEOUT_SECONDS")
-    ),
     FFMPEG_PATH=(
         Path(value)
         if (value := getenv("FFMPEG_PATH", "").strip())
@@ -59,4 +66,6 @@ settings = Settings(
     V2_MAX_REPAIR_ATTEMPTS=getenv("V2_MAX_REPAIR_ATTEMPTS", "2"),
     V2_ENABLE_MULTIMODAL=getenv("V2_ENABLE_MULTIMODAL", "false").lower()
     in {"1", "true", "yes", "on"},
+    SUPABASE_URL=getenv("SUPABASE_URL", "").strip(),
+    SUPABASE_SECRET_KEY=getenv("SUPABASE_SECRET_KEY", "").strip(),
 )

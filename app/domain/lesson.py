@@ -51,6 +51,66 @@ class ConceptGraph(BaseModel):
     edges: list[ConceptEdge] = Field(default_factory=list)
     teaching_sequence: list[NonEmptyString] = Field(min_length=1)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_teaching_sequence_labels(cls, value: object) -> object:
+        """Convert matching node labels to IDs at the model boundary.
+
+        Language models sometimes return human-readable concept labels in the
+        sequence even though the contract requires concept IDs. Matching labels
+        are normalized deterministically; unknown values remain untouched and
+        are rejected by the existing strict graph validator.
+        """
+
+        if not isinstance(value, dict):
+            return value
+        nodes = value.get("nodes")
+        sequence = value.get("teaching_sequence")
+        if not isinstance(nodes, list) or not isinstance(sequence, list):
+            return value
+
+        label_to_id: dict[str, str] = {}
+        known_ids: set[str] = set()
+        for node in nodes:
+            if isinstance(node, dict):
+                label = node.get("label")
+                concept_id = node.get("concept_id")
+            else:
+                label = getattr(node, "label", None)
+                concept_id = getattr(node, "concept_id", None)
+            if isinstance(label, str) and isinstance(concept_id, str):
+                label_to_id[label.strip().casefold()] = concept_id
+                known_ids.add(concept_id)
+        normalized_sequence = [
+            item
+            if isinstance(item, str) and item in known_ids
+            else label_to_id.get(item.strip().casefold(), item)
+            if isinstance(item, str)
+            else item
+            for item in sequence
+        ]
+        return {**value, "teaching_sequence": normalized_sequence}
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_schema_metadata(cls, value: object) -> object:
+        """Ignore JSON Schema definitions accidentally echoed by a model.
+
+        The structured prompt includes a JSON Schema. Some models copy schema
+        metadata such as ``$defs`` into the nested concept graph even though it
+        is not part of the lesson data. Removing only these schema-only keys at
+        the boundary keeps the data contract strict for real graph fields.
+        """
+
+        if not isinstance(value, dict):
+            return value
+        schema_metadata = {"$defs", "$schema", "definitions"}
+        return {
+            key: item
+            for key, item in value.items()
+            if key not in schema_metadata
+        }
+
     @model_validator(mode="after")
     def validate_graph(self) -> Self:
         """Require unique nodes, valid references, and a complete sequence."""

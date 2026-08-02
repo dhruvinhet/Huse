@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+from loguru import logger
+
 from app.utils.debug_recorder import DebugRecorder
 
 
@@ -14,6 +16,7 @@ def test_debug_bundle_records_jsonl_and_result(tmp_path: Path) -> None:
     assert run_dir is not None
 
     recorder.write_text("llm/prompt.txt", "Exact prompt")
+    logger.debug("debug step: test event")
     recorder.write_json("tts/input.json", {"text": "Narration"})
     recorder.append_jsonl("frames/frame_trace.jsonl", {"frame": 1})
     recorder.append_jsonl("frames/frame_trace.jsonl", {"frame": 2})
@@ -34,6 +37,8 @@ def test_debug_bundle_records_jsonl_and_result(tmp_path: Path) -> None:
     )
     assert Path(latest["path"]) == run_dir
     assert (run_dir / "llm" / "prompt.txt").read_text() == "Exact prompt"
+    pipeline_log = (run_dir / "pipeline.log").read_text(encoding="utf-8")
+    assert "debug step: test event" in pipeline_log
     trace_lines = (
         run_dir / "frames" / "frame_trace.jsonl"
     ).read_text(encoding="utf-8").splitlines()

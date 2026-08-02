@@ -23,7 +23,7 @@ def configured_settings(monkeypatch: pytest.MonkeyPatch) -> None:
 
     test_settings = SimpleNamespace(
         GEMINI_API_KEY="test-api-key",
-        GEMINI_TIMEOUT_SECONDS=30.0,
+        GEMINI_MODEL="gemini-3.5-flash",
     )
     monkeypatch.setattr(gemini_client, "settings", test_settings)
 
@@ -55,7 +55,7 @@ def test_missing_api_key_is_handled(
 
     test_settings = SimpleNamespace(
         GEMINI_API_KEY=" ",
-        GEMINI_TIMEOUT_SECONDS=30.0,
+        GEMINI_MODEL="gemini-3.5-flash",
     )
     sdk_constructor = MagicMock()
     monkeypatch.setattr(gemini_client, "settings", test_settings)
@@ -87,14 +87,14 @@ def test_client_initializes_once(
     assert sdk_client.models.generate_content.call_count == 2
 
 
-def test_client_supports_unlimited_timeout(
+def test_client_disables_sdk_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A None timeout disables the application-level request deadline."""
+    """The Gemini SDK is configured without an application deadline."""
 
     test_settings = SimpleNamespace(
         GEMINI_API_KEY="test-api-key",
-        GEMINI_TIMEOUT_SECONDS=None,
+        GEMINI_MODEL="gemini-3.5-flash",
     )
     sdk_constructor = MagicMock(return_value=MagicMock())
     monkeypatch.setattr(gemini_client, "settings", test_settings)
@@ -126,9 +126,10 @@ def test_generate_text_returns_stripped_response(
 
     assert result == "Generated response."
     request = sdk_client.models.generate_content.call_args.kwargs
-    assert request["model"] == "gemini-3.5-flash"
+    assert request["model"] == gemini_client.settings.GEMINI_MODEL
     assert request["contents"] == "Test prompt"
     assert request["config"].temperature == pytest.approx(0.2)
+
 
 
 def test_timeout_is_translated(
@@ -215,3 +216,63 @@ def test_empty_response_is_rejected(
 
     with pytest.raises(GeminiEmptyResponseError, match="empty text response"):
         GeminiClient().generate_text("Test prompt")
+
+
+def test_nvidia_provider_uses_chat_completions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The NVIDIA provider sends the prompt to its OpenAI-compatible endpoint."""
+
+    test_settings = SimpleNamespace(
+        AI_PROVIDER="nvidia",
+        NVIDIA_API_KEY="nvidia-test-key",
+        NVIDIA_MODEL="meta/llama-3.3-70b-instruct",
+        NVIDIA_BASE_URL="https://example.test/v1",
+        NVIDIA_MAX_TOKENS=2048,
+    )
+    response = MagicMock()
+    response.json.return_value = {
+        "choices": [{"message": {"content": "  NVIDIA response.\n"}}]
+    }
+    post = MagicMock(return_value=response)
+    monkeypatch.setattr(gemini_client, "settings", test_settings)
+    monkeypatch.setattr(gemini_client.httpx, "post", post)
+
+    result = GeminiClient().generate_text("Test prompt", temperature=0.2)
+
+    assert result == "NVIDIA response."
+    post.assert_called_once_with(
+        "https://example.test/v1/chat/completions",
+        headers={
+            "Authorization": "Bearer nvidia-test-key",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": "meta/llama-3.3-70b-instruct",
+            "messages": [{"role": "user", "content": "Test prompt"}],
+            "temperature": 0.2,
+            "max_tokens": 2048,
+            "stream": False,
+        },
+        timeout=None,
+    )
+    response.raise_for_status.assert_called_once_with()
+
+
+def test_nvidea_provider_alias_is_supported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The common misspelling remains accepted in existing .env files."""
+
+    test_settings = SimpleNamespace(
+        AI_PROVIDER="nvidea",
+        NVIDIA_API_KEY="nvidia-test-key",
+        NVIDIA_MODEL="test/model",
+    )
+    monkeypatch.setattr(gemini_client, "settings", test_settings)
+
+    client = GeminiClient()
+
+    assert client.PROVIDER == "nvidia"
+    assert client.MODEL_NAME == "test/model"

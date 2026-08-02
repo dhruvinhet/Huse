@@ -22,6 +22,7 @@ class DebugRecorder:
         self.enabled = enabled
         self._root_dir = self._working_path(root_dir)
         self._run_dir: Path | None = None
+        self._log_sink_id: int | None = None
         self._lock = Lock()
 
     @property
@@ -39,6 +40,20 @@ class DebugRecorder:
         run_id = f"{timestamp}_{uuid4().hex[:8]}"
         self._run_dir = self._root_dir / "runs" / run_id
         self._run_dir.mkdir(parents=True, exist_ok=False)
+        self._close_log_sink()
+        self._log_sink_id = logger.add(
+            self._run_dir / "pipeline.log",
+            level="DEBUG",
+            rotation=None,
+            enqueue=True,
+            backtrace=True,
+            diagnose=True,
+            encoding="utf-8",
+            format=(
+                "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
+                "{name}:{function}:{line} | {message}"
+            ),
+        )
         self.write_json(
             "run.json",
             {
@@ -53,6 +68,7 @@ class DebugRecorder:
             (
                 "Whiteboard Pipeline Debug Bundle\n\n"
                 "llm/ contains the exact prompt, raw response, and script.\n"
+                "pipeline.log contains every DEBUG/INFO/WARNING/ERROR event for this run.\n"
                 "tts/ contains narration text and measured scene timings.\n"
                 "pipeline/ contains assets, scene graph, timelines, and manifest.\n"
                 "frames/frame_trace.jsonl contains one JSON record per frame.\n"
@@ -98,24 +114,32 @@ class DebugRecorder:
                 "type": type(error).__name__,
                 "message": str(error),
             }
-        self.write_json("result.json", payload)
-        run_path = self._run_dir / "run.json"
         try:
-            run_payload = json.loads(run_path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError):
-            run_payload = {}
-        run_payload.update(
-            {
-                "status": status,
-                "finished_at": payload["finished_at"],
-            }
-        )
-        temporary_path = run_path.with_suffix(".json.tmp")
-        temporary_path.write_text(
-            json.dumps(run_payload, indent=2, ensure_ascii=False, default=str),
-            encoding="utf-8",
-        )
-        temporary_path.replace(run_path)
+            logger.info(
+                "Pipeline run finished (status={}, execution_time_seconds={:.3f}).",
+                status,
+                execution_time,
+            )
+            self.write_json("result.json", payload)
+            run_path = self._run_dir / "run.json"
+            try:
+                run_payload = json.loads(run_path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError):
+                run_payload = {}
+            run_payload.update(
+                {
+                    "status": status,
+                    "finished_at": payload["finished_at"],
+                }
+            )
+            temporary_path = run_path.with_suffix(".json.tmp")
+            temporary_path.write_text(
+                json.dumps(run_payload, indent=2, ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+            temporary_path.replace(run_path)
+        finally:
+            self._close_log_sink()
 
     def write_text(self, relative_path: str, content: str) -> None:
         """Write one UTF-8 text artifact when a run is active."""
@@ -173,6 +197,13 @@ class DebugRecorder:
         if not self.enabled or self._run_dir is None:
             return None
         return self._run_dir / Path(relative_path)
+
+    def _close_log_sink(self) -> None:
+        """Flush and remove the active per-run Loguru sink."""
+
+        if self._log_sink_id is not None:
+            logger.remove(self._log_sink_id)
+            self._log_sink_id = None
 
     @staticmethod
     def _working_path(configured_path: Path) -> Path:

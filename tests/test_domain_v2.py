@@ -136,11 +136,144 @@ def test_concept_graph_rejects_dangling_edges() -> None:
         )
 
 
+def test_concept_graph_normalizes_teaching_labels_to_ids() -> None:
+    """Human-readable model labels are normalized to contract IDs."""
+
+    graph = ConceptGraph(
+        objectives=["Explain"],
+        nodes=[
+            ConceptNode(
+                concept_id="root",
+                label="Root Concept",
+                definition="The starting concept",
+                importance=1,
+                teaching_order=0,
+            ),
+            ConceptNode(
+                concept_id="leaf",
+                label="Leaf Concept",
+                definition="The dependent concept",
+                importance=1,
+                prerequisites=["root"],
+                teaching_order=1,
+            ),
+        ],
+        teaching_sequence=["Root Concept", "Leaf Concept"],
+    )
+
+    assert graph.teaching_sequence == ["root", "leaf"]
+
+
+def test_concept_graph_drops_echoed_json_schema_metadata() -> None:
+    """Schema definitions echoed by a model are not lesson data."""
+
+    payload = concept_graph().model_dump(mode="json")
+    payload["$defs"] = {"ConceptEdge": {"type": "object"}}
+
+    graph = ConceptGraph.model_validate(payload)
+
+    assert graph.nodes
+    assert "$defs" not in graph.model_dump(mode="json")
+
+
 def test_storyboard_allows_created_descendant_operations() -> None:
     """Stable child IDs remain available in later beats."""
 
     model = storyboard()
     assert model.beats[1].operations[0].target_ids == ["output_box"]
+
+
+def test_storyboard_drops_empty_model_generated_beats() -> None:
+    """A prose-only beat does not block an otherwise valid storyboard."""
+
+    payload = storyboard().model_dump(mode="json")
+    payload["beats"].append(
+        {
+            "beat_id": "summary",
+            "section_id": "section_1",
+            "concept_ids": ["output"],
+            "teaching_intent": "Summarize the lesson",
+            "phrase_intent": "Summarize the lesson",
+            "purpose": "summarize",
+            "estimated_duration": 1,
+            "operations": [],
+        }
+    )
+
+    result = Storyboard.model_validate(payload)
+
+    assert [beat.beat_id for beat in result.beats] == ["beat_1", "beat_2"]
+
+
+def test_storyboard_normalizes_nested_initial_objects_and_missing_id() -> None:
+    """Small models may place initial objects inside the first beat."""
+
+    payload = storyboard().model_dump(mode="json")
+    initial_objects = payload["beats"][0]["operations"][0]["arguments"][
+        "objects"
+    ]
+    payload.pop("document_id")
+    payload["beats"][0]["operations"][0] = {
+        "operation_id": "show_pipeline",
+        "operation": "highlight",
+        "target_ids": ["pipeline"],
+        "arguments": {},
+    }
+    payload["beats"][0]["initial_objects"] = initial_objects
+
+    result = Storyboard.model_validate(payload)
+
+    assert result.document_id == "storyboard"
+    assert [item.object_id for item in result.initial_objects] == ["pipeline"]
+    assert result.beats[0].operations
+
+
+def test_storyboard_drops_duplicate_create_operations() -> None:
+    """Repeated model creates do not invalidate the persistent document."""
+
+    payload = storyboard().model_dump(mode="json")
+    create_operation = payload["beats"][0]["operations"][0]
+    payload["beats"][1]["operations"].append(
+        {
+            **create_operation,
+            "operation_id": "duplicate_pipeline",
+        }
+    )
+
+    result = Storyboard.model_validate(payload)
+
+    assert [operation.operation_id for operation in result.beats[1].operations] == [
+        "highlight_output"
+    ]
+
+
+def test_storyboard_drops_create_operations_without_objects() -> None:
+    """Malformed create operations do not block valid visual beats."""
+
+    payload = storyboard().model_dump(mode="json")
+    payload["beats"].append(
+        {
+            "beat_id": "bad_create",
+            "section_id": "section_1",
+            "concept_ids": ["output"],
+            "teaching_intent": "Show the result",
+            "phrase_intent": "Show the result",
+            "purpose": "demonstrate",
+            "estimated_duration": 1,
+            "operations": [
+                {
+                    "operation_id": "missing_objects",
+                    "operation": "create",
+                    "target_ids": ["bad_object"],
+                    "arguments": {},
+                }
+            ],
+        }
+    )
+
+    result = Storyboard.model_validate(payload)
+
+    assert [beat.beat_id for beat in result.beats] == ["beat_1", "beat_2"]
 
 
 def test_state_engine_preserves_objects_across_beats() -> None:

@@ -2,10 +2,10 @@
 
 This document is for a developer opening the project for the first time. It explains why the project exists, how it evolved, what currently works, where the important code lives, how a video is produced, how to debug it, what is still weak, and how to publish and contribute safely.
 
-Last verified: July 28, 2026  
+Last verified: August 2, 2026
 Python: 3.12  
 Default pipeline: V2  
-Automated test status at handoff: 92 passed
+Automated test status at handoff: complete test suite passes
 
 ## 1. Read this first
 
@@ -136,13 +136,12 @@ V2 added:
 - Versioned JSON schemas
 - V1/V2 compatibility adapters
 
-### Phase 5: Reliability, timeout, and speed work
+### Phase 5: Reliability and speed work
 
 Real Gemini calls sometimes needed much longer than expected. API timeouts became configurable and can be disabled with:
 
-```dotenv
-GEMINI_TIMEOUT_SECONDS=none
-```
+The current client uses no request timeout, so long-running provider requests
+are allowed to finish. This is intentional for the current workflow.
 
 Frame rendering was optimized through:
 
@@ -479,7 +478,6 @@ GEMINI_API_KEY=your_new_key_here
 OUTPUT_DIR=outputs
 TEMP_DIR=temp
 LOG_LEVEL=INFO
-GEMINI_TIMEOUT_SECONDS=none
 FFMPEG_PATH=
 DEBUG_ARTIFACTS=true
 DEBUG_DIR=outputs/debug
@@ -499,11 +497,8 @@ If FFmpeg is not on `PATH`, set `FFMPEG_PATH` to the local executable path.
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Expected test result at this handoff:
-
-```text
-92 passed
-```
+The exact test count may change as tests are added or updated; the complete
+suite should pass.
 
 Tests mock Gemini, Edge-TTS, and FFmpeg unless an external integration run is explicitly configured.
 

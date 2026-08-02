@@ -16,6 +16,19 @@ from app.models.audio import AudioMetadata
 from app.models.video_manifest import SceneManifest, VideoManifest
 
 
+@pytest.fixture(autouse=True)
+def ignore_machine_ffmpeg_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep unit tests independent of an optional developer-local FFmpeg path."""
+
+    monkeypatch.setattr(
+        video_composer,
+        "settings",
+        video_composer.settings.model_copy(update={"FFMPEG_PATH": None}),
+    )
+
+
 def sample_manifest() -> VideoManifest:
     """Create a two-frame, 30 FPS video manifest."""
 

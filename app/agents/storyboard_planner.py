@@ -11,7 +11,7 @@ from app.services.gemini_client import GeminiClient
 class GeminiStoryboardPlanner:
     """Convert a lesson into persistent semantic visual beats."""
 
-    def __init__(self, client: GeminiClient, max_attempts: int = 2) -> None:
+    def __init__(self, client: GeminiClient, max_attempts: int = 3) -> None:
         """Initialize the structured storyboard-planning agent."""
 
         self._agent = StructuredGeminiAgent(
@@ -45,8 +45,26 @@ class GeminiStoryboardPlanner:
             "Use comparison, timeline, cycle, cause-effect, chart, equation, or "
             "architecture semantics when they teach the concept more clearly. "
             "Create operations must include an arguments.objects array containing "
-            "complete VisualObjectSpec-shaped definitions matching target_ids. "
-            "Do not write final narration and do not restart the canvas between beats."
+            "complete VisualObjectSpec-shaped definitions matching target_ids; "
+            "never emit a create operation without that array. "
+            "Follow this object-lifecycle rule exactly: an update, move, resize, "
+            "highlight, dim, morph, connect, disconnect, show, hide, group, or "
+            "erase operation may target only an object already present in "
+            "initial_objects or created by an earlier beat. The safest valid arc "
+            "is to create all reusable objects in the first beat, then reference "
+            "only those existing IDs in later beats. Never reference an object "
+            "before its create operation, and never reuse a retired ID. "
+            "If an object already exists, update or highlight it; never emit a "
+            "second create operation for that object ID or any child ID. "
+            "Keep document_id and initial_objects at the storyboard top level; do not "
+            "place initial_objects inside a beat. "
+            "Do not write final narration and do not restart the canvas between beats. "
+            "Keep the response compact: use at most 4 beats, one operation per "
+            "beat unless a second is essential, and terse strings. Omit optional "
+            "attention, camera_intent, children, constraints, and final summary "
+            "entries unless they are necessary for teaching. Create only the "
+            "minimal required object fields and avoid verbose content. Every beat "
+            "must contain at least one operation."
         )
         payload = {
             "lesson": lesson.model_dump(mode="json"),

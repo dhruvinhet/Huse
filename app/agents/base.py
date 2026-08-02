@@ -1,6 +1,7 @@
 """Reusable structured-output behavior for bounded AI planners."""
 
 import json
+from collections.abc import Callable
 from typing import Generic, TypeVar
 
 from loguru import logger
@@ -36,7 +37,12 @@ class StructuredGeminiAgent(Generic[OutputT]):
         self._agent_name = agent_name
         self._max_attempts = max_attempts
 
-    def generate(self, instructions: str, input_payload: object) -> OutputT:
+    def generate(
+        self,
+        instructions: str,
+        input_payload: object,
+        validator: Callable[[OutputT], None] | None = None,
+    ) -> OutputT:
         """Generate, validate, and optionally repair one JSON artifact."""
 
         schema = self._output_type.model_json_schema()
@@ -45,11 +51,15 @@ class StructuredGeminiAgent(Generic[OutputT]):
             f"You are the {self._agent_name}.\n\n"
             f"{instructions.strip()}\n\n"
             "Return only one JSON object. Do not use markdown or code fences. "
+            "Every array constrained by minItems must contain at least one "
+            "item. Every enum or literal field must use one of its schema values "
+            "exactly; never invent a replacement value. "
             "The output must validate against this JSON Schema:\n"
             f"{json.dumps(schema, ensure_ascii=False)}\n\n"
             "Input artifact:\n"
             f"{payload_text}"
         )
+        provider = getattr(self._client, "PROVIDER", "").strip().lower()
         previous_response = ""
         previous_error = ""
         for attempt in range(1, self._max_attempts + 1):
@@ -57,7 +67,11 @@ class StructuredGeminiAgent(Generic[OutputT]):
             if previous_error:
                 prompt += (
                     "\n\nThe previous response failed validation. Repair only the "
-                    "specified contract defects.\nValidation error:\n"
+                    "specified contract defects. For `too_short` errors, add at "
+                    "least one valid item. For `literal_error` errors, replace "
+                    "the value with one of the allowed literal values shown in "
+                    "the schema. Return the complete object, never a patch.\n"
+                    "Validation error:\n"
                     f"{previous_error}\nPrevious response:\n{previous_response}"
                 )
             logger.info(
@@ -73,12 +87,34 @@ class StructuredGeminiAgent(Generic[OutputT]):
                     f"{self._agent_name} provider request failed"
                 ) from exc
             try:
-                artifact = self._output_type.model_validate_json(response)
+                artifact = self._output_type.model_validate_json(
+                    _prepare_json_response(response)
+                )
+                if validator is not None:
+                    validator(artifact)
             except ValidationError as exc:
-                previous_response = response
-                previous_error = str(exc)
+                if _is_truncated_json_error(exc):
+                    previous_response = ""
+                    previous_error = (
+                        "The previous response was truncated before the JSON "
+                        "object was complete. Regenerate the entire object from "
+                        "the input and keep it compact enough to finish."
+                    )
+                else:
+                    previous_response = "" if provider == "nvidia" else response
+                    previous_error = str(exc)
                 logger.warning(
                     "Structured agent response failed validation "
+                    "(agent={}, attempt={}).",
+                    self._agent_name,
+                    attempt,
+                )
+                continue
+            except ValueError as exc:
+                previous_response = "" if provider == "nvidia" else response
+                previous_error = str(exc)
+                logger.warning(
+                    "Structured agent response failed semantic validation "
                     "(agent={}, attempt={}).",
                     self._agent_name,
                     attempt,
@@ -94,3 +130,42 @@ class StructuredGeminiAgent(Generic[OutputT]):
             f"{self._agent_name} failed to produce valid output after "
             f"{self._max_attempts} attempts: {previous_error}"
         )
+
+
+def _is_truncated_json_error(error: ValidationError) -> bool:
+    """Return whether Pydantic rejected an incomplete JSON response."""
+
+    for detail in error.errors():
+        if detail.get("type") != "json_invalid":
+            continue
+        message = str(detail.get("msg", "")).lower()
+        context = str(detail.get("ctx", "")).lower()
+        if "eof" in message or "eof" in context:
+            return True
+    return False
+
+
+def _prepare_json_response(response: str) -> str:
+    """Remove harmless prose or markdown wrapped around one JSON artifact."""
+
+    stripped = response.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+
+    starts = [
+        position for position in (stripped.find("{"), stripped.find("["))
+    ]
+    starts = [position for position in starts if position >= 0]
+    if not starts:
+        return stripped
+    candidate = stripped[min(starts):]
+    try:
+        parsed, _ = json.JSONDecoder().raw_decode(candidate)
+    except json.JSONDecodeError:
+        return stripped
+    return json.dumps(parsed, ensure_ascii=False)

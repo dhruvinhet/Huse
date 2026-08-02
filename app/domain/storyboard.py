@@ -82,6 +82,154 @@ class Storyboard(BaseModel):
     initial_objects: list[VisualObjectSpec] = Field(default_factory=list)
     final_learning_summary: list[NonEmptyString] = Field(default_factory=list)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_model_shape(cls, value: object) -> object:
+        """Normalize two harmless placement omissions from smaller models."""
+
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if not normalized.get("document_id"):
+            normalized["document_id"] = "storyboard"
+
+        beats = normalized.get("beats")
+        root_objects = normalized.get("initial_objects")
+        if isinstance(beats, list) and beats and (
+            not isinstance(root_objects, list) or not root_objects
+        ):
+            first = beats[0]
+            if isinstance(first, dict) and isinstance(
+                first.get("initial_objects"), list
+            ):
+                normalized["initial_objects"] = first["initial_objects"]
+                beats[0] = {
+                    key: item
+                    for key, item in first.items()
+                    if key != "initial_objects"
+                }
+                normalized["beats"] = beats
+        return normalized
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_duplicate_create_operations(cls, value: object) -> object:
+        """Drop model-generated creates for objects that already exist.
+
+        A repeated create cannot represent a valid state transition. Removing
+        only that redundant operation preserves the existing object and lets
+        later update/highlight operations continue to target it.
+        """
+
+        if not isinstance(value, dict):
+            return value
+        beats = value.get("beats")
+        if not isinstance(beats, list):
+            return value
+
+        known: set[str] = set()
+        retired: set[str] = set()
+        for root in value.get("initial_objects", []):
+            if isinstance(root, dict):
+                known.update(_raw_object_ids(root))
+
+        changed = False
+        cleaned_beats: list[object] = []
+        for beat in beats:
+            if not isinstance(beat, dict):
+                cleaned_beats.append(beat)
+                continue
+            operations = beat.get("operations")
+            if not isinstance(operations, list):
+                cleaned_beats.append(beat)
+                continue
+
+            cleaned_operations: list[object] = []
+            for operation in operations:
+                if not isinstance(operation, dict):
+                    cleaned_operations.append(operation)
+                    continue
+                operation_name = str(operation.get("operation", "")).lower()
+                targets = {
+                    item
+                    for item in operation.get("target_ids", [])
+                    if isinstance(item, str)
+                }
+                if operation_name == "create":
+                    definitions = operation.get("arguments", {}).get("objects", [])
+                    created_ids = {
+                        object_id
+                        for definition in definitions
+                        if isinstance(definition, dict)
+                        for object_id in _raw_object_ids(definition)
+                    }
+                    if created_ids & (known | retired):
+                        changed = True
+                        continue
+                    known.update(created_ids or targets)
+                elif operation_name == "duplicate":
+                    known.update(targets)
+                elif operation_name == "erase":
+                    known.difference_update(targets)
+                    retired.update(targets)
+                cleaned_operations.append(operation)
+
+            if cleaned_operations:
+                cleaned_beats.append({**beat, "operations": cleaned_operations})
+            else:
+                changed = True
+
+        if not changed:
+            return value
+        return {**value, "beats": cleaned_beats}
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_empty_operation_beats(cls, value: object) -> object:
+        """Remove model-generated operations that cannot affect rendering.
+
+        Some providers emit prose-only beats with ``operations: []`` or create
+        operations without the required ``arguments.objects`` definitions. These
+        entries cannot affect the rendered document, so remove them when the
+        storyboard also contains valid visual beats. If every beat is empty, the
+        normal field validation still rejects the storyboard.
+        """
+
+        if not isinstance(value, dict):
+            return value
+        beats = value.get("beats")
+        if not isinstance(beats, list):
+            return value
+        cleaned_beats: list[object] = []
+        for beat in beats:
+            if not isinstance(beat, dict):
+                cleaned_beats.append(beat)
+                continue
+            operations = beat.get("operations")
+            if not isinstance(operations, list):
+                cleaned_beats.append(beat)
+                continue
+            cleaned_operations = [
+                operation
+                for operation in operations
+                if not (
+                    isinstance(operation, dict)
+                    and str(operation.get("operation", "")).lower() == "create"
+                    and not isinstance(
+                        operation.get("arguments", {}).get("objects")
+                        if isinstance(operation.get("arguments"), dict)
+                        else None,
+                        list,
+                    )
+                )
+            ]
+            if cleaned_operations:
+                cleaned_beats.append({**beat, "operations": cleaned_operations})
+        valid_beats = cleaned_beats
+        if valid_beats and len(valid_beats) != len(beats):
+            return {**value, "beats": valid_beats}
+        return value
+
     @model_validator(mode="after")
     def validate_storyboard(self) -> Self:
         """Require unique IDs and a valid sequential object lifecycle."""
@@ -173,3 +321,16 @@ class Storyboard(BaseModel):
             if beat.camera_intent and not set(beat.camera_intent.target_ids).issubset(all_known_ids):
                 raise ValueError("camera intents must target known objects")
         return self
+
+
+def _raw_object_ids(value: dict[str, object]) -> set[str]:
+    """Collect object IDs from one raw object tree."""
+
+    object_id = value.get("object_id")
+    ids = {object_id} if isinstance(object_id, str) else set()
+    children = value.get("children", [])
+    if isinstance(children, list):
+        for child in children:
+            if isinstance(child, dict):
+                ids.update(_raw_object_ids(child))
+    return ids

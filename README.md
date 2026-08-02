@@ -71,7 +71,7 @@ app/
 
 - Python 3.12
 - FFmpeg available on `PATH`, or configured with `FFMPEG_PATH`
-- Gemini API key for real AI planning runs
+- Gemini or NVIDIA API key for real AI planning runs
 
 ## Setup
 
@@ -85,11 +85,17 @@ Copy-Item .env.example .env
 Configure `.env`:
 
 ```dotenv
+AI_PROVIDER=gemini
 GEMINI_API_KEY=
+GEMINI_MODEL=gemini-3.5-flash
+NVIDIA_API_KEY=
+NVIDIA_MODEL=meta/llama-3.1-70b-instruct
+NVIDIA_VISION_MODEL=google/gemma-3n-e4b-it
+NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
+NVIDIA_MAX_TOKENS=16384
 OUTPUT_DIR=outputs
 TEMP_DIR=temp
 LOG_LEVEL=INFO
-GEMINI_TIMEOUT_SECONDS=none
 FFMPEG_PATH=
 DEBUG_ARTIFACTS=true
 DEBUG_DIR=outputs/debug
@@ -97,6 +103,11 @@ PIPELINE_VERSION=v2
 V2_MAX_REPAIR_ATTEMPTS=2
 V2_ENABLE_MULTIMODAL=false
 ```
+
+Set `AI_PROVIDER=gemini` to use Gemini, or `AI_PROVIDER=nvidia` (also accepted:
+`nvidea`) to use NVIDIA's hosted OpenAI-compatible API. When NVIDIA is selected,
+set `NVIDIA_API_KEY`; `NVIDIA_MODEL` controls text generation and
+`NVIDIA_VISION_MODEL` controls optional multimodal quality checks.
 
 Use `PIPELINE_VERSION=v2` to run the semantic pipeline, or set it to `v1` only when compatibility with the primitive renderer is required. Multimodal verification is optional because it adds model calls, latency, and cost.
 
