@@ -108,8 +108,63 @@ Set `AI_PROVIDER=gemini` to use Gemini, or `AI_PROVIDER=nvidia` (also accepted:
 `nvidea`) to use NVIDIA's hosted OpenAI-compatible API. When NVIDIA is selected,
 set `NVIDIA_API_KEY`; `NVIDIA_MODEL` controls text generation and
 `NVIDIA_VISION_MODEL` controls optional multimodal quality checks.
+NVIDIA structured prompts use compact schemas and bounded transport retries.
+If NVIDIA returns truncated, lifecycle-invalid, or concept-incomplete storyboard
+JSON, V2 compiles the validated lesson concept graph deterministically instead
+of repeatedly paying the provider for the same repair. Narration has the same
+local fallback. Increasing `NVIDIA_MAX_TOKENS` is therefore not required for
+pipeline correctness; use the smallest limit that reliably produces the lesson
+detail you want.
 
 Use `PIPELINE_VERSION=v2` to run the semantic pipeline, or set it to `v1` only when compatibility with the primitive renderer is required. Multimodal verification is optional because it adds model calls, latency, and cost.
+
+V2 routes every lesson through a deterministic pedagogy mode before visual
+planning. Supported modes include mechanism-first, worked example,
+misconception correction, analogy, proof/derivation, chronological,
+comparison, simulation, spatial anatomy, and code execution. Each mode defines
+its own shot grammar and narration obligations.
+
+When the reviewed template registry finds a match, `TemplateCompiler` treats
+the registry definition as authoritative. It validates the small parameter set,
+instantiates the registered hierarchy and layout constraints, grounds lesson
+concepts, and emits bounded shot transitions. The model-generated prototype in
+matching metadata is never copied into the production storyboard, and the
+storyboard model is not called for a successfully compiled match.
+
+If no reviewed template matches, the storyboard model returns only a compact
+`VisualIntent`: concept IDs, semantic relation, focal object, visible evidence,
+meaningful transformation, and a high-level renderer operator. It never creates
+object IDs, connectors, hierarchy, layout constraints, or lifecycle operations.
+`VisualIntentCompiler` expands that intent into the persistent storyboard
+deterministically, which keeps provider output small and removes low-level scene
+contract retries.
+
+Template retrieval is local and two-stage. Graph relations and required operand
+counts establish structural compatibility first; BM25 then ranks reviewed
+metadata against lesson objectives, labels, definitions, visual affordances,
+learning goal, and assumed knowledge. Conservative synonym normalization covers
+common conceptual wording such as lookup/search and endpoint/API. No embedding
+model or additional API request is required.
+
+All storyboard-producing paths now stop at high-level intent. The provider
+planner, concept-graph fallback, and compatibility template planner emit
+`VisualIntent`/`ShotSpec`; only deterministic compiler modules are allowed to
+create `VisualObjectSpec` hierarchies or lifecycle operations.
+
+Reviewed topic templates are procedural semantic operators with strict local
+parameter schemas. Binary search carries values, low/high/mid pointers, target
+comparison, and active code-line state; traversal operators carry graph edges,
+frontier, visited, and current-node state; protocol, neural-network, memory,
+hash-map, scheduling, tree-index, system, and blockchain operators expose their
+own domain operands. Lesson-derived operands replace fixed recipe labels.
+
+Pixel rendering is fail-closed. Every kind declared by the semantic-kind
+registry has an explicit renderer plugin, and every high-level operator has a
+distinct vector motif. Unsupported kinds and unresolved semantic assets raise
+an error before a generic box can be drawn. Shared primitives remain reusable,
+but arrays, trees, timelines, cycles, comparisons, protocols, architecture,
+flowcharts, funnels, Venn diagrams, charts, code traces, and topic operators no
+longer share the old rounded-rectangle fallback.
 
 ## Run
 
@@ -125,7 +180,7 @@ The prompt asks for a topic and writes `outputs/final_video.mp4`.
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Tests do not make real Gemini, TTS, or FFmpeg network/process calls unless explicitly configured as an external integration run.
+Tests do not make real Gemini, NVIDIA, TTS, or FFmpeg network/process calls unless explicitly configured as an external integration run.
 
 ## JSON Schemas
 

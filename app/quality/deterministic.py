@@ -11,7 +11,7 @@ from app.domain.quality import (
     QualityFinding,
     QualityReport,
 )
-from app.domain.storyboard import Storyboard
+from app.domain.storyboard import Storyboard, VisualObjectSpec
 from app.domain.visual_document import VisualDocument
 from app.quality.policy import QualityPolicy
 from app.planning.density import VisualDensityPlanner
@@ -67,6 +67,7 @@ class DeterministicQualityEvaluator:
         scores["asset_readiness"] = self._asset_readiness(
             artifact_id,
             assets,
+            storyboard,
             findings,
         )
         scores["layout"] = self._layout_quality(
@@ -79,8 +80,17 @@ class DeterministicQualityEvaluator:
             motion,
             findings,
         )
-        scores["state_integrity"] = 1.0 if document is not None else 0.5
-        scores["readability"] = self._readability(layout)
+        scores["state_integrity"] = self._state_progression(
+            artifact_id,
+            document,
+            findings,
+        )
+        scores["readability"] = self._readability(
+            artifact_id,
+            layout,
+            document,
+            findings,
+        )
         scores["diagram_correctness"] = 1.0
         scores["alignment"] = 1.0 if motion is not None else 0.5
         scores["visual_density"] = self._density_quality(
@@ -120,6 +130,7 @@ class DeterministicQualityEvaluator:
             for beat in storyboard.beats
             for concept_id in beat.concept_ids
         }
+        missing = sorted(important - represented)
         score = 1.0 if not important else len(important & represented) / len(important)
         if score < self._policy.minimum_concept_coverage:
             findings.append(
@@ -129,7 +140,8 @@ class DeterministicQualityEvaluator:
                     artifact_id=artifact_id,
                     message=(
                         f"Important concept coverage {score:.2f} is below "
-                        f"{self._policy.minimum_concept_coverage:.2f}."
+                        f"{self._policy.minimum_concept_coverage:.2f}. "
+                        f"Missing concept IDs: {missing}."
                     ),
                     repair_target="storyboard",
                 )
@@ -140,12 +152,44 @@ class DeterministicQualityEvaluator:
         self,
         artifact_id: str,
         assets: ResolvedAssetSet | None,
+        storyboard: Storyboard | None,
         findings: list[QualityFinding],
     ) -> float:
         """Reject unresolved or placeholder assets."""
 
-        if assets is None or not assets.assets:
+        if assets is None:
             return 1.0
+        expected: set[str] = set()
+        if storyboard is not None:
+            roots = list(storyboard.initial_objects)
+            for beat in storyboard.beats:
+                for operation in beat.operations:
+                    raw = operation.arguments.get("objects")
+                    if not isinstance(raw, list):
+                        continue
+                    roots.extend(
+                        VisualObjectSpec.model_validate(item)
+                        for item in raw
+                        if isinstance(item, dict)
+                    )
+            expected = {
+                f"asset_{item.object_id}"
+                for root in roots
+                for item in root.flatten()
+                if item.asset_query is not None
+            }
+        resolved_ids = {item.asset_id for item in assets.assets}
+        missing = sorted(expected - resolved_ids)
+        if missing:
+            findings.append(QualityFinding(
+                code="semantic_assets_missing",
+                severity=FindingSeverity.ERROR,
+                artifact_id=artifact_id,
+                message=f"Required semantic assets were not resolved: {missing}.",
+                repair_target="assets",
+            ))
+        if not assets.assets:
+            return 0.0 if expected else 1.0
         ready = 0
         for asset in assets.assets:
             placeholder = "placeholder" in asset.path.lower()
@@ -166,7 +210,47 @@ class DeterministicQualityEvaluator:
                     repair_target="assets",
                 )
             )
-        return ready / len(assets.assets)
+        return min(
+            ready / len(assets.assets),
+            (len(expected & resolved_ids) / len(expected)) if expected else 1.0,
+        )
+
+    @staticmethod
+    def _state_progression(
+        artifact_id: str,
+        document: VisualDocument | None,
+        findings: list[QualityFinding],
+    ) -> float:
+        """Reject adjacent checkpoints that are visually identical."""
+
+        if document is None:
+            return 0.5
+        signatures: list[tuple[tuple[object, ...], ...]] = []
+        for state in document.states:
+            signatures.append(tuple(sorted(
+                (
+                    object_id,
+                    item.kind,
+                    item.lifecycle.value,
+                    repr(sorted(item.content.items())),
+                )
+                for object_id, item in state.object_states.items()
+            )))
+        repeated = [
+            document.states[index].beat_id
+            for index in range(1, len(signatures))
+            if signatures[index] == signatures[index - 1]
+        ]
+        if repeated:
+            findings.append(QualityFinding(
+                code="visual_state_unchanged",
+                severity=FindingSeverity.ERROR,
+                artifact_id=artifact_id,
+                message=f"Adjacent beats do not change visible state: {repeated}.",
+                repair_target="storyboard",
+            ))
+            return max(0.0, 1.0 - len(repeated) / len(signatures))
+        return 1.0
 
     def _layout_quality(
         self,
@@ -228,24 +312,87 @@ class DeterministicQualityEvaluator:
             )
         return min(1.0, self._policy.maximum_static_gap / max(maximum_gap, 0.001))
 
-    def _readability(self, layout: LayoutPlan | None) -> float:
-        """Score minimum widths for text-like semantic nodes."""
+    def _readability(
+        self,
+        artifact_id: str,
+        layout: LayoutPlan | None,
+        document: VisualDocument | None,
+        findings: list[QualityFinding],
+    ) -> float:
+        """Score geometry for every object that actually paints text."""
 
         if layout is None:
             return 0.5
-        text_nodes = [
-            node
-            for root in layout.state_roots.values()
-            for node in self._flatten(root)
-            if node.kind in {"text", "label", "annotation", "equation"}
-        ]
-        if not text_nodes:
+        content_by_id = {
+            object_id: object_state.content
+            for state in (document.states if document is not None else [])
+            for object_id, object_state in state.object_states.items()
+        }
+        nodes_by_id: dict[str, LaidOutNode] = {}
+        for root in layout.state_roots.values():
+            for node in self._flatten(root):
+                nodes_by_id[node.object_id] = node
+        candidates: list[tuple[LaidOutNode, bool, str]] = []
+        for node in nodes_by_id.values():
+            if node.kind == "connector":
+                continue
+            content = content_by_id.get(node.object_id, {})
+            has_label = node.kind in {
+                "text", "label", "annotation", "equation"
+            } or any(
+                isinstance(content.get(key), str)
+                and bool(str(content.get(key)).strip())
+                for key in ("label", "text", "value")
+            )
+            has_detail = isinstance(content.get("detail"), str) and bool(
+                str(content.get("detail")).strip()
+            )
+            if has_label:
+                label = str(
+                    content.get("label")
+                    or content.get("text")
+                    or content.get("value")
+                    or ""
+                ).strip()
+                candidates.append((node, has_detail, label))
+        if not candidates:
             return 1.0
-        readable = sum(
-            node.box.width >= self._policy.minimum_text_width
-            for node in text_nodes
+        unreadable: list[str] = []
+        output_scale = min(
+            1.0,
+            layout.viewport.width / 1920.0,
+            layout.viewport.height / 1080.0,
         )
-        return readable / len(text_nodes)
+        for node, has_detail, label in candidates:
+            label_width = min(
+                320.0,
+                max(
+                    self._policy.minimum_text_width,
+                    28.0 + min(36, len(label)) * 8.0,
+                ),
+            )
+            minimum_width = max(
+                180.0 if has_detail else 0.0,
+                label_width,
+            ) * output_scale
+            minimum_height = (110.0 if has_detail else 36.0) * output_scale
+            if (
+                node.box.width < minimum_width
+                or node.box.height < minimum_height
+            ):
+                unreadable.append(node.object_id)
+        if unreadable:
+            findings.append(QualityFinding(
+                code="semantic_text_geometry_unreadable",
+                severity=FindingSeverity.ERROR,
+                artifact_id=artifact_id,
+                message=(
+                    "Text-bearing semantic objects are too small for their "
+                    f"content: {sorted(unreadable)}."
+                ),
+                repair_target="layout",
+            ))
+        return 1.0 - len(unreadable) / len(candidates)
 
     def _density_quality(
         self,

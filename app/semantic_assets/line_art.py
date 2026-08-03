@@ -1,134 +1,292 @@
-"""Deterministic whiteboard line-art fallback for unresolved concepts."""
+"""Relation-aware deterministic compositions for unresolved semantic assets."""
 
+from __future__ import annotations
+
+from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
+from xml.etree import ElementTree
 
-import svgwrite
-
+from app.config.settings import PROJECT_ROOT
 from app.domain.assets import AssetQuery
+from app.semantic_assets.catalog import AssetCatalog, CatalogAsset
+
+
+@dataclass(frozen=True, slots=True)
+class CompositionPlan:
+    """Describe selected local components and their visual relation grammar."""
+
+    asset_ids: tuple[str, ...]
+    relation: str
+    license_ids: tuple[str, ...] = ()
+    diagnostic_fallback: bool = False
 
 
 class DeterministicLineArtGenerator:
-    """Generate editable semantic pictograms in one coherent line-art style."""
+    """Compose one to three local SVGs before using a diagnostic lightbulb."""
 
     SIZE = 512
+    _RELATION_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("inside", ("inside", "within", "contains", "part of", "in a")),
+        ("flows-to", ("flows to", "sends", "transmits", "leads to", "causes", "request", "response")),
+        ("transforms-into", ("transforms", "converts", "becomes", "changes into", "turns into")),
+        ("compares-with", ("compare", "comparison", "versus", " vs ", "difference between")),
+        ("orbits", ("orbit", "revolves", "around")),
+        ("blocks", ("blocks", "prevents", "stops", "guards", "protects")),
+        ("repeats", ("repeat", "recursive", "recursion", "loop", "cycle")),
+    )
+
+    def __init__(self, catalog: AssetCatalog | None = None) -> None:
+        """Use the same checked-in catalog as direct retrieval."""
+
+        self._catalog = catalog or AssetCatalog()
+
+    def plan(self, query: AssetQuery) -> CompositionPlan:
+        """Retrieve diverse local components and select a relation grammar."""
+
+        candidates = self._catalog.rank(query, limit=6)
+        selected: list[CatalogAsset] = []
+        represented_categories: set[str] = set()
+        for candidate in candidates:
+            categories = set(candidate.categories)
+            if selected and categories and categories <= represented_categories:
+                continue
+            selected.append(candidate)
+            represented_categories.update(categories)
+            if len(selected) == 3:
+                break
+        if not selected:
+            return CompositionPlan((), "diagnostic", diagnostic_fallback=True)
+        return CompositionPlan(
+            tuple(item.asset_id for item in selected),
+            self._relation(query, selected),
+            tuple(sorted({item.license_id for item in selected})),
+        )
 
     def generate(self, query: AssetQuery, output_path: Path) -> Path:
-        """Generate a stable whiteboard-style semantic badge."""
+        """Create a stable editable SVG from retrieved local primitives."""
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        drawing = svgwrite.Drawing(
-            filename=str(output_path),
-            size=(f"{self.SIZE}px", f"{self.SIZE}px"),
-            profile="tiny",
+        composition = self.plan(query)
+        root = ElementTree.Element(
+            "svg",
+            {
+                "xmlns": "http://www.w3.org/2000/svg",
+                "width": str(self.SIZE),
+                "height": str(self.SIZE),
+                "viewBox": f"0 0 {self.SIZE} {self.SIZE}",
+            },
         )
-        drawing.viewbox(0, 0, self.SIZE, self.SIZE)
-        group = drawing.g(
-            fill="white",
-            stroke="#202124",
-            stroke_width=10,
-            stroke_linecap="round",
-            stroke_linejoin="round",
+        metadata = ElementTree.SubElement(root, "metadata")
+        metadata.text = (
+            f"Huse offline composition; relation={composition.relation}; "
+            f"components={','.join(composition.asset_ids) or 'diagnostic'}; "
+            f"licenses={','.join(composition.license_ids) or 'generated-internal'}"
         )
-        concept = self._category(query.concept, query.required_semantics)
-        self._draw_icon(drawing, group, concept)
-        drawing.add(group)
-        label = query.concept[:36]
-        drawing.add(
-            drawing.text(
-                label,
-                insert=(256, 450),
-                text_anchor="middle",
-                font_size=28,
-                font_family="sans-serif",
-                fill="black",
+        if composition.diagnostic_fallback:
+            self._draw_diagnostic(root)
+        else:
+            records = {
+                item.asset_id: item for item in self._catalog.records()
+            }
+            components = self._ordered_components(
+                [records[item] for item in composition.asset_ids],
+                composition.relation,
             )
+            self._draw_composition(root, components, composition.relation)
+        ElementTree.SubElement(
+            root,
+            "text",
+            {
+                "x": "256",
+                "y": "462",
+                "text-anchor": "middle",
+                "font-size": "25",
+                "font-family": "sans-serif",
+                "fill": "#202124",
+            },
+        ).text = query.concept[:48]
+        ElementTree.ElementTree(root).write(
+            output_path,
+            encoding="utf-8",
+            xml_declaration=True,
         )
-        drawing.save(pretty=True)
         return output_path
 
     @staticmethod
-    def _category(concept: str, semantics: list[str]) -> str:
-        """Map free-form semantic queries to a reviewed icon category."""
+    def _ordered_components(
+        components: list[CatalogAsset],
+        relation: str,
+    ) -> list[CatalogAsset]:
+        """Use catalog roles to put containers, centers, sources, and targets correctly."""
 
-        terms = f"{concept} {' '.join(semantics)}".lower()
-        categories = {
-            "database": ("database", "storage", "data store", "sql"),
-            "cloud": ("cloud", "internet"),
-            "server": ("server", "compute", "backend"),
-            "person": ("person", "user", "student", "human", "customer"),
-            "team": ("team", "people", "group"),
-            "document": ("document", "file", "paper", "report", "book"),
-            "security": ("security", "lock", "shield", "auth", "privacy"),
-            "money": ("money", "finance", "price", "cost", "revenue"),
-            "network": ("network", "nodes", "graph", "connection"),
-            "ai": ("ai", "robot", "model", "neural", "llm"),
-            "device": ("phone", "mobile", "browser", "computer", "client"),
-            "education": ("education", "learn", "school", "course"),
-            "health": ("health", "medical", "hospital", "patient"),
-        }
-        for category, keywords in categories.items():
-            if any(keyword in terms for keyword in keywords):
-                return category
-        return "idea"
+        priorities = {
+            "inside": ("container", "content"),
+            "orbits": ("center", "satellite"),
+            "flows-to": ("source", "target"),
+            "transforms-into": ("source", "target"),
+            "blocks": ("source", "barrier", "target"),
+        }.get(relation, ())
+        if not priorities:
+            return components
+        rank = {role: index for index, role in enumerate(priorities)}
+        return sorted(
+            components,
+            key=lambda item: min(
+                (rank[role] for role in item.composition_roles if role in rank),
+                default=len(rank),
+            ),
+        )
 
-    def _draw_icon(self, drawing: svgwrite.Drawing, group: object, category: str) -> None:
-        """Draw one recognizable icon using editable SVG primitives."""
+    def _draw_composition(
+        self,
+        root: ElementTree.Element,
+        components: list[CatalogAsset],
+        relation: str,
+    ) -> None:
+        """Place retrieved icons and draw the selected relation explicitly."""
 
-        add = group.add
-        if category == "database":
-            add(drawing.ellipse(center=(256, 128), r=(118, 48)))
-            add(drawing.path(d="M138 128 V330 C138 394 374 394 374 330 V128"))
-            add(drawing.path(d="M138 226 C138 290 374 290 374 226"))
-            add(drawing.path(d="M138 318 C138 382 374 382 374 318"))
-        elif category == "cloud":
-            add(drawing.path(d="M132 342 C65 342 68 240 146 230 C160 126 303 105 344 199 C438 191 460 338 365 342 Z"))
-        elif category == "server":
-            for y in (92, 205, 318):
-                add(drawing.rect(insert=(112, y), size=(288, 82), rx=14))
-                add(drawing.circle(center=(356, y + 41), r=9, fill="#2a6ccd", stroke="none"))
-        elif category in {"person", "team"}:
-            centers = (256,) if category == "person" else (170, 256, 342)
-            for x in centers:
-                add(drawing.circle(center=(x, 164), r=48 if category == "person" else 36))
-                add(drawing.path(d=f"M{x-74} 350 Q{x} 246 {x+74} 350"))
-        elif category == "document":
-            add(drawing.path(d="M142 72 H322 L390 140 V400 H142 Z"))
-            add(drawing.path(d="M322 72 V140 H390"))
-            for y in (206, 262, 318):
-                add(drawing.line(start=(190, y), end=(340, y)))
-        elif category == "security":
-            add(drawing.path(d="M256 68 L390 118 V224 C390 324 334 386 256 420 C178 386 122 324 122 224 V118 Z"))
-            add(drawing.rect(insert=(202, 220), size=(108, 96), rx=14))
-            add(drawing.path(d="M220 220 V188 C220 138 292 138 292 188 V220"))
-        elif category == "money":
-            add(drawing.circle(center=(256, 244), r=148))
-            add(drawing.path(d="M310 170 C285 136 205 144 205 190 C205 238 309 218 309 276 C309 330 221 338 190 298"))
-            add(drawing.line(start=(256, 126), end=(256, 354)))
-        elif category == "network":
-            nodes = ((256, 100), (128, 240), (384, 240), (200, 380), (330, 380))
-            for first, second in ((0, 1), (0, 2), (1, 3), (1, 4), (2, 3), (2, 4)):
-                add(drawing.line(start=nodes[first], end=nodes[second]))
-            for point in nodes:
-                add(drawing.circle(center=point, r=26, fill="white"))
-        elif category == "ai":
-            add(drawing.rect(insert=(130, 118), size=(252, 244), rx=54))
-            add(drawing.line(start=(256, 74), end=(256, 118)))
-            add(drawing.circle(center=(256, 62), r=13, fill="#2a6ccd"))
-            add(drawing.circle(center=(205, 218), r=16, fill="#2a6ccd"))
-            add(drawing.circle(center=(307, 218), r=16, fill="#2a6ccd"))
-            add(drawing.path(d="M194 292 Q256 332 318 292"))
-        elif category == "device":
-            add(drawing.rect(insert=(105, 105), size=(302, 210), rx=18))
-            add(drawing.line(start=(176, 372), end=(336, 372)))
-            add(drawing.path(d="M220 315 L202 372 M292 315 L310 372"))
-        elif category == "education":
-            add(drawing.path(d="M86 190 L256 96 L426 190 L256 284 Z"))
-            add(drawing.path(d="M150 228 V326 Q256 392 362 326 V228"))
-            add(drawing.path(d="M426 190 V320"))
-        elif category == "health":
-            add(drawing.path(d="M256 404 C122 328 94 246 130 176 C170 96 246 130 256 180 C266 130 342 96 382 176 C418 246 390 328 256 404 Z"))
-            add(drawing.path(d="M256 214 V326 M200 270 H312"))
+        if relation == "inside" and len(components) >= 2:
+            placements = [(126.0, 54.0, 260.0), (206.0, 134.0, 100.0)]
+        elif relation == "orbits" and len(components) >= 2:
+            placements = [(176.0, 104.0, 160.0), (356.0, 84.0, 82.0)]
+            ElementTree.SubElement(
+                root,
+                "ellipse",
+                self._stroke_attrs(cx="256", cy="190", rx="192", ry="106", width="4"),
+            )
         else:
-            add(drawing.path(d="M256 74 C158 74 128 180 176 246 C198 276 210 292 214 326 H298 C302 292 314 276 336 246 C384 180 354 74 256 74 Z"))
-            add(drawing.line(start=(216, 362), end=(296, 362)))
-            add(drawing.line(start=(226, 396), end=(286, 396)))
+            placements_by_count = {
+                1: [(136.0, 62.0, 240.0)],
+                2: [(62.0, 100.0, 148.0), (302.0, 100.0, 148.0)],
+                3: [(34.0, 122.0, 112.0), (200.0, 122.0, 112.0), (366.0, 122.0, 112.0)],
+            }
+            placements = placements_by_count[len(components)]
+        for component, placement in zip(components, placements, strict=False):
+            self._embed(component, root, *placement)
+        if len(components) >= 2 and relation not in {"inside", "orbits"}:
+            self._draw_relation(root, relation, len(components))
+
+    def _embed(
+        self,
+        asset: CatalogAsset,
+        destination: ElementTree.Element,
+        x: float,
+        y: float,
+        size: float,
+    ) -> None:
+        """Embed the complete local SVG tree under a deterministic transform."""
+
+        source_path = asset.path if asset.path.is_absolute() else PROJECT_ROOT / asset.path
+        source_root = ElementTree.parse(source_path).getroot()
+        view_box = [float(item) for item in source_root.get("viewBox", "0 0 24 24").split()]
+        source_width, source_height = view_box[2], view_box[3]
+        scale = min(size / source_width, size / source_height)
+        group_attributes = {
+            "transform": (
+                f"translate({x:.3f} {y:.3f}) scale({scale:.6f}) "
+                f"translate({-view_box[0]:.3f} {-view_box[1]:.3f})"
+            ),
+            "color": "#202124",
+        }
+        for attribute in (
+            "fill",
+            "stroke",
+            "stroke-width",
+            "stroke-linecap",
+            "stroke-linejoin",
+        ):
+            if source_root.get(attribute) is not None:
+                group_attributes[attribute] = str(source_root.get(attribute))
+        group = ElementTree.SubElement(destination, "g", group_attributes)
+        for child in source_root:
+            group.append(deepcopy(child))
+
+    def _draw_relation(self, root: ElementTree.Element, relation: str, count: int) -> None:
+        """Draw relation grammar between horizontally placed components."""
+
+        centers = [136, 376] if count == 2 else [90, 256, 422]
+        if relation == "compares-with":
+            for left, right in zip(centers, centers[1:], strict=False):
+                self._arrow(root, left + 60, right - 60, 190, bidirectional=True)
+        elif relation == "blocks":
+            for left, right in zip(centers, centers[1:], strict=False):
+                midpoint = (left + right) / 2
+                self._arrow(root, left + 60, midpoint - 15, 190)
+                ElementTree.SubElement(root, "line", self._stroke_attrs(x1=str(midpoint), y1="142", x2=str(midpoint), y2="238", width="9"))
+        else:
+            for left, right in zip(centers, centers[1:], strict=False):
+                self._arrow(root, left + 60, right - 60, 190)
+        ElementTree.SubElement(
+            root,
+            "text",
+            {
+                "x": "256",
+                "y": "382",
+                "text-anchor": "middle",
+                "font-size": "20",
+                "font-family": "sans-serif",
+                "fill": "#2a6ccd",
+            },
+        ).text = relation.replace("-", " ")
+
+    def _arrow(
+        self,
+        root: ElementTree.Element,
+        start: float,
+        end: float,
+        y: float,
+        *,
+        bidirectional: bool = False,
+    ) -> None:
+        ElementTree.SubElement(root, "line", self._stroke_attrs(x1=str(start), y1=str(y), x2=str(end), y2=str(y), width="5"))
+        ElementTree.SubElement(root, "polygon", {"points": f"{end},{y} {end - 16},{y - 10} {end - 16},{y + 10}", "fill": "#202124", "stroke": "none", "stroke-width": "1"})
+        if bidirectional:
+            ElementTree.SubElement(root, "polygon", {"points": f"{start},{y} {start + 16},{y - 10} {start + 16},{y + 10}", "fill": "#202124", "stroke": "none", "stroke-width": "1"})
+
+    def _draw_diagnostic(self, root: ElementTree.Element) -> None:
+        """Draw the lightbulb only when the catalog supplies no components."""
+
+        ElementTree.SubElement(root, "circle", self._stroke_attrs(cx="256", cy="178", r="102", width="10"))
+        ElementTree.SubElement(root, "rect", self._stroke_attrs(x="218", y="278", width_value="76", height="54", width="10"))
+        ElementTree.SubElement(root, "line", self._stroke_attrs(x1="226", y1="368", x2="286", y2="368", width="10"))
+        ElementTree.SubElement(
+            root,
+            "text",
+            {"x": "256", "y": "404", "text-anchor": "middle", "font-size": "18", "font-family": "sans-serif", "fill": "#b3261e"},
+        ).text = "unresolved asset"
+
+    @classmethod
+    def _relation(cls, query: AssetQuery, assets: list[CatalogAsset]) -> str:
+        """Prefer explicit language, then metadata relation hints."""
+
+        text = f" {query.concept} {' '.join(query.required_semantics)} ".lower()
+        for relation, markers in cls._RELATION_PATTERNS:
+            if any(marker in text for marker in markers):
+                return relation
+        votes: dict[str, int] = {}
+        for asset in assets:
+            for relation in asset.relations:
+                votes[relation] = votes.get(relation, 0) + 1
+        if votes:
+            return sorted(votes, key=lambda item: (-votes[item], item))[0]
+        return "associates-with"
+
+    @staticmethod
+    def _stroke_attrs(
+        *,
+        width: str,
+        width_value: str | None = None,
+        **coordinates: str,
+    ) -> dict[str, str]:
+        attrs = {
+            **coordinates,
+            "fill": "none",
+            "stroke": "#202124",
+            "stroke-width": width,
+            "stroke-linecap": "round",
+            "stroke-linejoin": "round",
+        }
+        if width_value is not None:
+            attrs["width"] = width_value
+        return attrs

@@ -2,24 +2,37 @@
 
 from app.agents.base import StructuredGeminiAgent
 from app.domain.lesson import LessonPlan
+from app.domain.pedagogy import PedagogyPlan
 from app.domain.storyboard import Storyboard
 from app.domain.strategy import TemplateMatch, VisualStrategy
 from app.domain.quality import QualityReport
+from app.domain.visual_intent import VisualIntent
+from app.planning.visual_intent_compiler import VisualIntentCompiler
 from app.services.gemini_client import GeminiClient
 
 
 class GeminiStoryboardPlanner:
-    """Convert a lesson into persistent semantic visual beats."""
+    """Plan high-level visual intent and compile it deterministically."""
 
     def __init__(self, client: GeminiClient, max_attempts: int = 3) -> None:
         """Initialize the structured storyboard-planning agent."""
 
+        effective_attempts = 1 if client.PROVIDER == "nvidia" else max_attempts
         self._agent = StructuredGeminiAgent(
             client,
-            Storyboard,
-            "Visual Storyboard Planner",
-            max_attempts,
+            VisualIntent,
+            "Visual Intent Planner",
+            effective_attempts,
         )
+        self._compiler = VisualIntentCompiler()
+        self._last_intent: VisualIntent | None = None
+        self._last_pedagogy: PedagogyPlan | None = None
+
+    @property
+    def last_intent(self) -> VisualIntent | None:
+        """Expose the last validated model artifact for debug recording."""
+
+        return self._last_intent
 
     def plan(
         self,
@@ -29,49 +42,71 @@ class GeminiStoryboardPlanner:
     ) -> Storyboard:
         """Create progressive visual operations without coordinates."""
 
-        instructions = (
-            "Create a storyboard that teaches through evolving visuals. Use "
-            "persistent object IDs and semantic object kinds. Never output x, y, "
-            "width, height, or other pixel coordinates. Each beat must introduce, "
-            "change, connect, annotate, or emphasize meaningful objects and must "
-            "include phrase_intent for the narration writer. Prefer matched "
-            "templates and recognized semantic kinds over generic shapes. Every "
-            "connector needs source_id and target_id in content. Progressively "
-            "disclose outlines, labels, connections, highlights, and conclusions. "
-            "Assign every beat a purpose: introduce, demonstrate, compare, "
-            "transform, connect, emphasize, or summarize. Build a teaching arc "
-            "that normally introduces the idea, demonstrates or transforms it, "
-            "connects relationships, and ends with a compact visual summary. "
-            "Use comparison, timeline, cycle, cause-effect, chart, equation, or "
-            "architecture semantics when they teach the concept more clearly. "
-            "Create operations must include an arguments.objects array containing "
-            "complete VisualObjectSpec-shaped definitions matching target_ids; "
-            "never emit a create operation without that array. "
-            "Follow this object-lifecycle rule exactly: an update, move, resize, "
-            "highlight, dim, morph, connect, disconnect, show, hide, group, or "
-            "erase operation may target only an object already present in "
-            "initial_objects or created by an earlier beat. The safest valid arc "
-            "is to create all reusable objects in the first beat, then reference "
-            "only those existing IDs in later beats. Never reference an object "
-            "before its create operation, and never reuse a retired ID. "
-            "If an object already exists, update or highlight it; never emit a "
-            "second create operation for that object ID or any child ID. "
-            "Keep document_id and initial_objects at the storyboard top level; do not "
-            "place initial_objects inside a beat. "
-            "Do not write final narration and do not restart the canvas between beats. "
-            "Keep the response compact: use at most 4 beats, one operation per "
-            "beat unless a second is essential, and terse strings. Omit optional "
-            "attention, camera_intent, children, constraints, and final summary "
-            "entries unless they are necessary for teaching. Create only the "
-            "minimal required object fields and avoid verbose content. Every beat "
-            "must contain at least one operation."
+        return self.plan_with_pedagogy(
+            lesson,
+            strategies,
+            templates,
+            None,
         )
+
+    def plan_with_pedagogy(
+        self,
+        lesson: LessonPlan,
+        strategies: list[VisualStrategy],
+        templates: list[TemplateMatch],
+        pedagogy: PedagogyPlan | None,
+    ) -> Storyboard:
+        """Create a storyboard that obeys the routed teaching grammar."""
+
+        self._last_intent = None
+        self._last_pedagogy = pedagogy
+        instructions = (
+            "Describe only high-level visual teaching intent. For each shot choose "
+            "the lesson concept IDs, their semantic relation when relevant, the "
+            "single focal object, factual evidence that must be visible, the "
+            "meaningful transformation, and one renderer operator. Do not invent "
+            "object IDs, scene objects, connectors, hierarchy, coordinates, "
+            "layout constraints, operations, camera instructions, or narration. "
+            "Those implementation details are owned by a deterministic compiler. "
+            "Use only concept IDs from the lesson and cover every important "
+            "concept. Evidence must be a concrete fact, value, state, comparison, "
+            "or observation rather than decorative prose."
+        )
+        if pedagogy is not None:
+            instructions += (
+                f" The selected teaching mode is {pedagogy.mode.value}. "
+                "Use each routed shot_id exactly once in the supplied order and "
+                "make its focal object, evidence, and transformation satisfy the "
+                "corresponding visual obligation."
+            )
         payload = {
             "lesson": lesson.model_dump(mode="json"),
-            "strategies": [item.model_dump(mode="json") for item in strategies],
-            "template_matches": [item.model_dump(mode="json") for item in templates],
+            "strategy_hints": [
+                {
+                    "concept_ids": item.concept_ids,
+                    "teaching_strategy": item.teaching_strategy,
+                    "animation_hints": item.animation_hints,
+                }
+                for item in strategies
+            ],
+            "pedagogy_plan": (
+                pedagogy.model_dump(mode="json")
+                if pedagogy is not None
+                else None
+            ),
         }
-        return self._agent.generate(instructions, payload)
+        del templates  # Reviewed matches are compiled before this model path.
+        intent = self._agent.generate(
+            instructions,
+            payload,
+            validator=lambda item: self._compiler.validate_intent(
+                item,
+                lesson,
+                pedagogy,
+            ),
+        )
+        self._last_intent = intent
+        return self._compiler.compile(intent, lesson, pedagogy)
 
     def repair(
         self,
@@ -84,18 +119,49 @@ class GeminiStoryboardPlanner:
         """Repair only defects identified by a structured quality report."""
 
         instructions = (
-            "Repair the previous storyboard using every actionable quality "
-            "finding. Preserve correct concepts and stable object IDs whenever "
-            "possible. Do not output coordinates. Remove placeholders, empty "
-            "decorative shapes, dangling references, unexplained static spans, "
-            "and missing high-importance concepts. Return the complete repaired "
-            "storyboard, not a patch."
+            "Repair the high-level visual intent using every actionable quality "
+            "finding. Change only concepts, relation, focal object, evidence, "
+            "transformation, or renderer operator. Never emit scene objects, IDs, "
+            "coordinates, hierarchy, connectors, or visual operations. Return the "
+            "complete compact visual intent, not a patch."
         )
         payload = {
             "lesson": lesson.model_dump(mode="json"),
-            "previous_storyboard": previous.model_dump(mode="json"),
+            "previous_visual_intent": (
+                self._last_intent.model_dump(mode="json")
+                if self._last_intent is not None
+                else self._distill_storyboard(previous)
+            ),
             "quality_report": report.model_dump(mode="json"),
-            "strategies": [item.model_dump(mode="json") for item in strategies],
-            "template_matches": [item.model_dump(mode="json") for item in templates],
+            "strategy_hints": [item.teaching_strategy for item in strategies],
         }
-        return self._agent.generate(instructions, payload)
+        del templates
+        intent = self._agent.generate(
+            instructions,
+            payload,
+            validator=lambda item: self._compiler.validate_intent(
+                item,
+                lesson,
+                self._last_pedagogy,
+            ),
+        )
+        self._last_intent = intent
+        return self._compiler.compile(intent, lesson, self._last_pedagogy)
+
+    @staticmethod
+    def _distill_storyboard(previous: Storyboard) -> dict[str, object]:
+        """Remove low-level object trees before asking for intent repair."""
+
+        return {
+            "lesson_focus": previous.title,
+            "shots": [
+                {
+                    "shot_id": beat.beat_id,
+                    "concept_ids": beat.concept_ids,
+                    "teaching_intent": beat.teaching_intent,
+                    "phrase_intent": beat.phrase_intent,
+                    "purpose": beat.purpose,
+                }
+                for beat in previous.beats
+            ],
+        }

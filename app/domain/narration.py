@@ -21,7 +21,7 @@ class NarrationPlan(BaseModel):
     """Represent ordered narration written from a storyboard."""
 
     schema_version: Literal["2.0"] = "2.0"
-    title: NonEmptyString
+    title: NonEmptyString = "Narration"
     phrases: list[NarrationPhrase] = Field(min_length=1)
 
     @model_validator(mode="after")

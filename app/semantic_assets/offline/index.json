@@ -1,0 +1,221 @@
+{
+  "schema_version": "1.0",
+  "description": "Curated offline vector vocabulary normalized to editable 24x24 SVG primitives.",
+  "assets": [
+    {
+      "asset_id": "lucide-database",
+      "source_collection": "Lucide",
+      "concepts": ["database", "data store"],
+      "aliases": ["storage", "sql", "repository", "records"],
+      "categories": ["data", "infrastructure"],
+      "tags": ["persistence", "table", "memory"],
+      "relations": ["flows-to"],
+      "path": "app/semantic_assets/offline/svg/lucide-database.svg",
+      "license_id": "Lucide-ISC"
+    },
+    {
+      "asset_id": "lucide-server",
+      "source_collection": "Lucide",
+      "concepts": ["server", "backend"],
+      "aliases": ["compute", "host", "service", "api"],
+      "categories": ["infrastructure", "computing"],
+      "tags": ["request", "response", "network"],
+      "relations": ["flows-to"],
+      "path": "app/semantic_assets/offline/svg/lucide-server.svg",
+      "license_id": "Lucide-ISC"
+    },
+    {
+      "asset_id": "lucide-user",
+      "source_collection": "Lucide",
+      "concepts": ["person", "user"],
+      "aliases": ["human", "customer", "student", "actor"],
+      "categories": ["people"],
+      "tags": ["participant", "audience", "client"],
+      "relations": ["flows-to"],
+      "path": "app/semantic_assets/offline/svg/lucide-user.svg",
+      "license_id": "Lucide-ISC"
+    },
+    {
+      "asset_id": "lucide-file-text",
+      "source_collection": "Lucide",
+      "concepts": ["document", "file"],
+      "aliases": ["paper", "report", "book", "record"],
+      "categories": ["information"],
+      "tags": ["text", "content", "knowledge"],
+      "relations": ["inside"],
+      "path": "app/semantic_assets/offline/svg/lucide-file-text.svg",
+      "license_id": "Lucide-ISC"
+    },
+    {
+      "asset_id": "lucide-shield-check",
+      "source_collection": "Lucide",
+      "concepts": ["security", "protection"],
+      "aliases": ["shield", "privacy", "authentication", "authorization"],
+      "categories": ["security"],
+      "tags": ["lock", "safe", "guard", "prevent", "block"],
+      "relations": ["blocks"],
+      "path": "app/semantic_assets/offline/svg/lucide-shield-check.svg",
+      "license_id": "Lucide-ISC"
+    },
+    {
+      "asset_id": "lucide-coins",
+      "source_collection": "Lucide",
+      "concepts": ["money", "finance"],
+      "aliases": ["currency", "price", "cost", "revenue", "economy"],
+      "categories": ["economics"],
+      "tags": ["inflation", "interest", "capital", "value"],
+      "relations": ["flows-to"],
+      "composition_roles": ["source"],
+      "path": "app/semantic_assets/offline/svg/lucide-coins.svg",
+      "license_id": "Lucide-ISC"
+    },
+    {
+      "asset_id": "lucide-network",
+      "source_collection": "Lucide",
+      "concepts": ["network", "graph"],
+      "aliases": ["connection", "nodes", "topology", "relationships"],
+      "categories": ["structure", "computing"],
+      "tags": ["edges", "distributed", "internet"],
+      "relations": ["flows-to"],
+      "path": "app/semantic_assets/offline/svg/lucide-network.svg",
+      "license_id": "Lucide-ISC"
+    },
+    {
+      "asset_id": "lucide-bot",
+      "source_collection": "Lucide",
+      "concepts": ["robot", "artificial intelligence"],
+      "aliases": ["ai", "machine learning", "model", "agent"],
+      "categories": ["computing", "intelligence"],
+      "tags": ["neural", "automation", "llm"],
+      "relations": ["transforms-into"],
+      "path": "app/semantic_assets/offline/svg/lucide-bot.svg",
+      "license_id": "Lucide-ISC"
+    },
+    {
+      "asset_id": "lucide-monitor",
+      "source_collection": "Lucide",
+      "concepts": ["computer", "device"],
+      "aliases": ["monitor", "screen", "browser", "client"],
+      "categories": ["hardware", "computing"],
+      "tags": ["display", "interface", "desktop"],
+      "relations": ["flows-to"],
+      "path": "app/semantic_assets/offline/svg/lucide-monitor.svg",
+      "license_id": "Lucide-ISC"
+    },
+    {
+      "asset_id": "lucide-graduation-cap",
+      "source_collection": "Lucide",
+      "concepts": ["education", "learning"],
+      "aliases": ["school", "course", "teaching", "student"],
+      "categories": ["education"],
+      "tags": ["knowledge", "training", "lesson"],
+      "relations": ["transforms-into"],
+      "path": "app/semantic_assets/offline/svg/lucide-graduation-cap.svg",
+      "license_id": "Lucide-ISC"
+    },
+    {
+      "asset_id": "lucide-heart-pulse",
+      "source_collection": "Lucide",
+      "concepts": ["health", "medicine"],
+      "aliases": ["medical", "hospital", "patient", "heart"],
+      "categories": ["biology", "health"],
+      "tags": ["body", "life", "pulse"],
+      "relations": ["inside"],
+      "path": "app/semantic_assets/offline/svg/lucide-heart-pulse.svg",
+      "license_id": "Lucide-ISC"
+    },
+    {
+      "asset_id": "lucide-code",
+      "source_collection": "Lucide",
+      "concepts": ["code", "programming"],
+      "aliases": ["software", "algorithm", "function", "source code"],
+      "categories": ["computing"],
+      "tags": ["recursion", "recursive", "call", "execution"],
+      "relations": ["repeats"],
+      "path": "app/semantic_assets/offline/svg/lucide-code.svg",
+      "license_id": "Lucide-ISC"
+    },
+    {
+      "asset_id": "material-trending-up",
+      "source_collection": "Material Symbols",
+      "concepts": ["increase", "growth"],
+      "aliases": ["trend up", "rising", "chart", "gain"],
+      "categories": ["data", "economics"],
+      "tags": ["inflation", "price", "rate", "compound interest"],
+      "relations": ["flows-to"],
+      "composition_roles": ["target"],
+      "path": "app/semantic_assets/offline/svg/material-trending-up.svg",
+      "license_id": "Material-Symbols-Apache-2.0"
+    },
+    {
+      "asset_id": "material-arrow-downward",
+      "source_collection": "Material Symbols",
+      "concepts": ["downward", "attraction"],
+      "aliases": ["arrow down", "fall", "pull", "force"],
+      "categories": ["direction", "physics"],
+      "tags": ["gravity", "weight", "acceleration"],
+      "relations": ["orbits"],
+      "composition_roles": ["satellite"],
+      "path": "app/semantic_assets/offline/svg/material-arrow-downward.svg",
+      "license_id": "Material-Symbols-Apache-2.0"
+    },
+    {
+      "asset_id": "material-public",
+      "source_collection": "Material Symbols",
+      "concepts": ["world", "planet"],
+      "aliases": ["globe", "earth", "global"],
+      "categories": ["space", "geography"],
+      "tags": ["gravity", "orbit", "environment"],
+      "relations": ["orbits"],
+      "composition_roles": ["center", "container"],
+      "path": "app/semantic_assets/offline/svg/material-public.svg",
+      "license_id": "Material-Symbols-Apache-2.0"
+    },
+    {
+      "asset_id": "material-bolt",
+      "source_collection": "Material Symbols",
+      "concepts": ["energy", "power"],
+      "aliases": ["electricity", "bolt", "charge"],
+      "categories": ["physics", "energy"],
+      "tags": ["mitochondria", "mitochondrial", "atp", "respiration"],
+      "relations": ["transforms-into"],
+      "composition_roles": ["content", "target"],
+      "path": "app/semantic_assets/offline/svg/material-bolt.svg",
+      "license_id": "Material-Symbols-Apache-2.0"
+    },
+    {
+      "asset_id": "material-sync",
+      "source_collection": "Material Symbols",
+      "concepts": ["repeat", "cycle"],
+      "aliases": ["loop", "sync", "iteration"],
+      "categories": ["process", "computing"],
+      "tags": ["recursion", "recursive", "recurrence", "feedback"],
+      "relations": ["repeats"],
+      "path": "app/semantic_assets/offline/svg/material-sync.svg",
+      "license_id": "Material-Symbols-Apache-2.0"
+    },
+    {
+      "asset_id": "material-compare-arrows",
+      "source_collection": "Material Symbols",
+      "concepts": ["comparison", "exchange"],
+      "aliases": ["compare", "versus", "difference", "trade"],
+      "categories": ["relation"],
+      "tags": ["bidirectional", "contrast", "alternative"],
+      "relations": ["compares-with"],
+      "path": "app/semantic_assets/offline/svg/material-compare-arrows.svg",
+      "license_id": "Material-Symbols-Apache-2.0"
+    },
+    {
+      "asset_id": "material-science",
+      "source_collection": "Material Symbols",
+      "concepts": ["science", "cell biology"],
+      "aliases": ["laboratory", "research", "biological cell"],
+      "categories": ["biology", "science"],
+      "tags": ["mitochondria", "mitochondrial", "organelle", "cellular"],
+      "relations": ["inside"],
+      "composition_roles": ["container"],
+      "path": "app/semantic_assets/offline/svg/material-science.svg",
+      "license_id": "Material-Symbols-Apache-2.0"
+    }
+  ]
+}

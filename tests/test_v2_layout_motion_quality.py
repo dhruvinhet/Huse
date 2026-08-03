@@ -70,22 +70,22 @@ def test_layout_motion_camera_and_quality_form_valid_plan() -> None:
     assert report.scores["semantic_coverage"] == 1
 
 
-def test_semantic_asset_fallback_creates_ready_svg(tmp_path: Path) -> None:
+def test_semantic_asset_diagnostic_fallback_creates_ready_svg(tmp_path: Path) -> None:
     """Unknown semantic queries resolve to editable line art, not placeholders."""
 
     from app.domain.assets import AssetKind, AssetQuery
     from app.domain.storyboard import VisualObjectSpec
     item = VisualObjectSpec(
-        object_id="robot",
+        object_id="quasar",
         kind="semantic_asset",
         semantic_role="actor",
-        content={"label": "Robot"},
+        content={"label": "Quasar luminosity"},
         asset_query=AssetQuery(
-            concept="robot learning",
+            concept="purple quasar luminosity",
             asset_kind=AssetKind.LINE_ART,
             style_id="whiteboard.default",
         ),
-        accessibility_label="Robot learning",
+        accessibility_label="Quasar luminosity",
     )
     board = storyboard().model_copy(
         update={"initial_objects": [item]},
@@ -98,3 +98,29 @@ def test_semantic_asset_fallback_creates_ready_svg(tmp_path: Path) -> None:
     assert result.assets[0].ready
     assert "placeholder" not in result.assets[0].path
     assert (generated_dir / f"{result.assets[0].query_digest}.svg").is_file()
+
+
+def test_coverage_finding_names_missing_concept_ids() -> None:
+    """Repair diagnostics tell providers and deterministic repair what is absent."""
+
+    board = storyboard()
+    incomplete = board.model_copy(
+        update={
+            "beats": [
+                beat.model_copy(update={"concept_ids": ["input"]})
+                for beat in board.beats
+            ]
+        }
+    )
+
+    report = DeterministicQualityEvaluator().evaluate(
+        "storyboard",
+        incomplete,
+        {"concept_graph": concept_graph()},
+    )
+
+    finding = next(
+        item for item in report.findings
+        if item.code == "semantic_coverage_low"
+    )
+    assert "output" in finding.message

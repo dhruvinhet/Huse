@@ -41,6 +41,7 @@ from app.domain.narration import (
     PhraseTiming,
 )
 from app.domain.operations import OperationType, VisualOperation
+from app.domain.pedagogy import PedagogyMode, PedagogyPlan, PedagogyShot
 from app.domain.quality import (
     EvaluationDecision,
     FindingSeverity,
@@ -54,12 +55,14 @@ from app.domain.storyboard import (
     VisualBeat,
     VisualObjectSpec,
 )
+from app.domain.strategy import CompiledTemplateProgram, TemplateMatch, VisualStrategy
 from app.domain.visual_document import (
     ObjectLifecycle,
     ObjectState,
     VisualDocument,
     VisualState,
 )
+from app.domain.visual_intent import RendererOperator, ShotSpec, VisualIntent
 
 __all__ = [
     "AlignedAudio",
@@ -78,6 +81,7 @@ __all__ = [
     "ConceptGraph",
     "ConceptNode",
     "ConceptRelation",
+    "CompiledTemplateProgram",
     "ConstraintStrength",
     "ConstraintType",
     "EvaluationDecision",
@@ -97,16 +101,24 @@ __all__ = [
     "ObjectState",
     "OperationType",
     "OutputProfile",
+    "PedagogyMode",
+    "PedagogyPlan",
+    "PedagogyShot",
     "PhraseTiming",
     "PipelineVersion",
     "QualityFinding",
     "QualityReport",
     "ResolvedAssetSet",
     "ResolvedSemanticAsset",
+    "RendererOperator",
+    "ShotSpec",
     "Storyboard",
+    "TemplateMatch",
     "Viewport",
     "VisualBeat",
+    "VisualStrategy",
     "VisualDocument",
+    "VisualIntent",
     "VisualObjectSpec",
     "VisualOperation",
     "VisualState",

@@ -1,0 +1,138 @@
+{
+  "$defs": {
+    "ConceptRelation": {
+      "description": "Supported educational relationships between concepts.",
+      "enum": [
+        "depends_on",
+        "part_of",
+        "causes",
+        "transforms_to",
+        "contrasts_with",
+        "example_of",
+        "flows_to"
+      ],
+      "title": "ConceptRelation",
+      "type": "string"
+    },
+    "RendererOperator": {
+      "description": "High-level renderer programs available to visual planning.",
+      "enum": [
+        "process",
+        "comparison",
+        "timeline",
+        "array",
+        "tree",
+        "graph",
+        "equation",
+        "code_trace",
+        "simulation",
+        "spatial",
+        "binary_search",
+        "sorting",
+        "graph_traversal",
+        "neural_network",
+        "protocol",
+        "system",
+        "tree_index",
+        "scheduling",
+        "memory_map",
+        "hash_map",
+        "blockchain",
+        "cycle",
+        "cause_effect",
+        "layered",
+        "flowchart",
+        "funnel",
+        "venn",
+        "bar_chart",
+        "line_chart"
+      ],
+      "title": "RendererOperator",
+      "type": "string"
+    },
+    "ShotSpec": {
+      "additionalProperties": false,
+      "description": "Describe teaching intent without scene-graph implementation details.",
+      "properties": {
+        "shot_id": {
+          "minLength": 1,
+          "title": "Shot Id",
+          "type": "string"
+        },
+        "concept_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Concept Ids",
+          "type": "array"
+        },
+        "relation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConceptRelation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "focal_object": {
+          "minLength": 1,
+          "title": "Focal Object",
+          "type": "string"
+        },
+        "evidence": {
+          "minLength": 1,
+          "title": "Evidence",
+          "type": "string"
+        },
+        "transformation": {
+          "minLength": 1,
+          "title": "Transformation",
+          "type": "string"
+        },
+        "renderer_operator": {
+          "$ref": "#/$defs/RendererOperator"
+        }
+      },
+      "required": [
+        "shot_id",
+        "concept_ids",
+        "focal_object",
+        "evidence",
+        "transformation",
+        "renderer_operator"
+      ],
+      "title": "ShotSpec",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Represent a complete high-level visual lesson program.",
+  "properties": {
+    "lesson_focus": {
+      "minLength": 1,
+      "title": "Lesson Focus",
+      "type": "string"
+    },
+    "shots": {
+      "items": {
+        "$ref": "#/$defs/ShotSpec"
+      },
+      "maxItems": 6,
+      "minItems": 1,
+      "title": "Shots",
+      "type": "array"
+    }
+  },
+  "required": [
+    "lesson_focus",
+    "shots"
+  ],
+  "title": "VisualIntent",
+  "type": "object",
+  "$id": "whiteboard/visual-intent-2.0"
+}

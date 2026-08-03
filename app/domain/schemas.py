@@ -16,6 +16,7 @@ from app.domain.quality import QualityReport
 from app.domain.rendering import FrameSequence, RenderJob, VideoArtifact
 from app.domain.storyboard import Storyboard
 from app.domain.visual_document import VisualDocument
+from app.domain.visual_intent import VisualIntent
 
 
 SCHEMA_MODELS: dict[str, type[PydanticModel]] = {
@@ -35,6 +36,7 @@ SCHEMA_MODELS: dict[str, type[PydanticModel]] = {
     "storyboard-2.0": Storyboard,
     "video-artifact-2.0": VideoArtifact,
     "visual-document-2.0": VisualDocument,
+    "visual-intent-2.0": VisualIntent,
 }
 
 

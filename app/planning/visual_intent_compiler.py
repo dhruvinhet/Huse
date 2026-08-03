@@ -1,0 +1,335 @@
+"""Compile compact visual intent into a persistent semantic storyboard."""
+
+import re
+
+from app.domain.lesson import LessonPlan
+from app.domain.operations import OperationType, VisualOperation
+from app.domain.pedagogy import PedagogyPlan, PedagogyShot
+from app.domain.storyboard import (
+    AttentionCue,
+    CameraIntent,
+    Storyboard,
+    VisualBeat,
+    VisualObjectSpec,
+)
+from app.domain.visual_intent import ShotSpec, VisualIntent
+from app.templates.operator_templates import (
+    GenericOperatorParameters,
+    PARAMETER_MODELS,
+    SemanticOperatorCompiler,
+)
+
+
+class VisualIntentCompiler:
+    """Own all low-level IDs, hierarchy, constraints, and transitions."""
+
+    def compile(
+        self,
+        intent: VisualIntent,
+        lesson: LessonPlan,
+        pedagogy: PedagogyPlan | None = None,
+    ) -> Storyboard:
+        """Expand high-level shots into a validated persistent visual program."""
+
+        self.validate_intent(intent, lesson, pedagogy)
+        ids = self._object_ids(lesson)
+        first = intent.shots[0]
+        root = self._initial_hierarchy(first, lesson, ids)
+        self._compiled_objects = root.flatten()
+        beats = [
+            self._compile_shot(
+                shot,
+                index,
+                lesson,
+                pedagogy,
+                ids,
+                root if index == 0 else None,
+            )
+            for index, shot in enumerate(intent.shots)
+        ]
+        important = [
+            f"{node.label}: {node.definition}"
+            for node in lesson.concept_graph.nodes
+            if node.importance >= 0.5
+        ]
+        return Storyboard(
+            document_id=f"intent_{self._safe_id(lesson.title)}",
+            title=lesson.title,
+            beats=beats,
+            final_learning_summary=important,
+        )
+
+    @staticmethod
+    def validate_intent(
+        intent: VisualIntent,
+        lesson: LessonPlan,
+        pedagogy: PedagogyPlan | None = None,
+    ) -> None:
+        """Reject unknown concepts or violations of routed shot grammar."""
+
+        known = {node.concept_id for node in lesson.concept_graph.nodes}
+        referenced = {
+            concept_id
+            for shot in intent.shots
+            for concept_id in shot.concept_ids
+        }
+        unknown = sorted(referenced - known)
+        if unknown:
+            raise ValueError(f"visual intent references unknown concepts: {unknown}")
+        important = {
+            node.concept_id
+            for node in lesson.concept_graph.nodes
+            if node.importance >= 0.5
+        }
+        missing = sorted(important - referenced)
+        if missing:
+            raise ValueError(f"visual intent omits important concepts: {missing}")
+        operators = {shot.renderer_operator for shot in intent.shots}
+        if len(operators) != 1:
+            raise ValueError(
+                "all shots in one persistent visual intent must use the same "
+                "renderer operator"
+            )
+        if pedagogy is None:
+            return
+        expected = [shot.shot_id for shot in pedagogy.shots]
+        actual = [shot.shot_id for shot in intent.shots]
+        if actual != expected:
+            raise ValueError(
+                "visual intent shots must exactly match routed shot IDs and order"
+            )
+
+    def _initial_hierarchy(
+        self,
+        shot: ShotSpec,
+        lesson: LessonPlan,
+        ids: dict[str, str],
+    ) -> VisualObjectSpec:
+        """Create the one stable scene graph reused by every shot."""
+
+        by_id = {
+            node.concept_id: node for node in lesson.concept_graph.nodes
+        }
+        parameters = {
+            "object_id": ids["root"],
+            "label": lesson.title,
+            "operands": [
+                by_id[item].label
+                for item in lesson.concept_graph.teaching_sequence
+            ],
+            "concepts": [
+                {
+                    "concept_id": node.concept_id,
+                    "label": node.label,
+                    "definition": node.definition,
+                    "importance": node.importance,
+                    "order": node.teaching_order,
+                    "visual_affordances": node.visual_affordances,
+                }
+                for node in lesson.concept_graph.nodes
+            ],
+            "relations": [
+                {
+                    "source_id": edge.source_id,
+                    "target_id": edge.target_id,
+                    "relation": edge.relation.value,
+                    "label": edge.label,
+                }
+                for edge in lesson.concept_graph.edges
+            ],
+        }
+        model = PARAMETER_MODELS.get(
+            shot.renderer_operator,
+            GenericOperatorParameters,
+        )
+        validated = model.model_validate(parameters)
+        root = SemanticOperatorCompiler().compile(
+            shot.renderer_operator,
+            validated,
+        )
+        evidence = VisualObjectSpec(
+            object_id=ids["evidence"],
+            kind="callout",
+            semantic_role="evidence",
+            concept_ids=shot.concept_ids,
+            content={
+                "text": shot.evidence,
+                "transformation": shot.transformation,
+            },
+            style_token="annotation",
+            accessibility_label=shot.evidence,
+        )
+        root.children.append(evidence)
+        return root.model_copy(
+            update={
+                "semantic_role": "compiled_visual_intent",
+                "accessibility_label": f"{lesson.title} visual explanation",
+            }
+        )
+
+    def _compile_shot(
+        self,
+        shot: ShotSpec,
+        index: int,
+        lesson: LessonPlan,
+        pedagogy: PedagogyPlan | None,
+        ids: dict[str, str],
+        root: VisualObjectSpec | None,
+    ) -> VisualBeat:
+        """Compile one intent shot into only allowed deterministic mutations."""
+
+        route = self._routed_shot(pedagogy, index)
+        known_objects = getattr(self, "_compiled_objects", [])
+        concept_targets = [
+            item.object_id
+            for item in known_objects
+            if item.kind != "connector"
+            and item.object_id != ids["root"]
+            and set(item.concept_ids).intersection(shot.concept_ids)
+        ]
+        relation_targets = [
+            item.object_id
+            for item in known_objects
+            if item.kind == "connector"
+            and set(item.concept_ids).intersection(shot.concept_ids)
+        ]
+        targets = list(dict.fromkeys(
+            [*concept_targets, *relation_targets]
+        )) or [ids["root"]]
+        reset_targets = [
+            item.object_id
+            for item in known_objects
+            if item.object_id != ids["root"]
+        ]
+        if root is not None:
+            operations = [
+                VisualOperation(
+                    operation_id=f"intent_{index:02d}_create",
+                    operation=OperationType.CREATE,
+                    target_ids=[ids["root"]],
+                    arguments={"objects": [root.model_dump(mode="json")]},
+                )
+            ]
+        else:
+            operations = [
+                VisualOperation(
+                    operation_id=f"intent_{index:02d}_evidence",
+                    operation=OperationType.UPDATE,
+                    target_ids=[ids["evidence"]],
+                    arguments={
+                        "content": {
+                            "text": shot.evidence,
+                            "transformation": shot.transformation,
+                        }
+                    },
+                )
+            ]
+        if reset_targets:
+            operations.append(
+                VisualOperation(
+                    operation_id=f"intent_{index:02d}_show",
+                    operation=OperationType.SHOW,
+                    target_ids=reset_targets,
+                )
+            )
+        purpose = route.purpose if route is not None else (
+            "introduce" if index == 0 else "summarize"
+        )
+        if purpose != "summarize":
+            if reset_targets:
+                operations.append(
+                    VisualOperation(
+                        operation_id=f"intent_{index:02d}_dim",
+                        operation=OperationType.DIM,
+                        target_ids=reset_targets,
+                    )
+                )
+            operations.append(
+                VisualOperation(
+                    operation_id=f"intent_{index:02d}_highlight",
+                    operation=OperationType.HIGHLIGHT,
+                    target_ids=targets,
+                )
+            )
+        visual_obligation = (
+            route.visual_obligation
+            if route is not None
+            else shot.transformation
+        )
+        return VisualBeat(
+            beat_id=f"shot_{index + 1:02d}_{self._safe_id(shot.shot_id)}",
+            section_id=(
+                f"pedagogy_{pedagogy.mode.value}"
+                if pedagogy is not None
+                else "visual_intent"
+            ),
+            concept_ids=shot.concept_ids,
+            teaching_intent=f"{visual_obligation} {shot.transformation}",
+            phrase_intent=self._natural_phrase_intent(
+                shot,
+                lesson,
+                purpose,
+            ),
+            purpose=purpose,
+            estimated_duration=10.0 if index == 0 else 6.0,
+            operations=operations,
+            attention=[
+                AttentionCue(
+                    cue="focus",
+                    target_ids=targets,
+                    intensity=0.85,
+                )
+            ],
+            camera_intent=CameraIntent(
+                operation=(route.camera_operation if route else "hold"),
+                target_ids=[ids["root"]],
+            ),
+        )
+
+    @staticmethod
+    def _natural_phrase_intent(
+        shot: ShotSpec,
+        lesson: LessonPlan,
+        purpose: str,
+    ) -> str:
+        """Produce factual fallback speech without exposing prompt obligations."""
+
+        by_id = {
+            node.concept_id: node for node in lesson.concept_graph.nodes
+        }
+        labels = ", ".join(
+            by_id[item].label
+            for item in shot.concept_ids
+            if item in by_id
+        )
+        evidence = shot.evidence.rstrip(".")
+        if purpose == "summarize":
+            objective = lesson.concept_graph.objectives[0].rstrip(".")
+            return f"In summary, {evidence}. This explains how to {objective}."
+        if purpose == "connect" and shot.relation is not None:
+            relation = shot.relation.value.replace("_", " ")
+            return f"For {labels}, the key relationship is {relation}. {evidence}."
+        if purpose in {"transform", "demonstrate"}:
+            return f"Watch {labels}: {evidence}."
+        return f"We begin with {labels}. {evidence}."
+
+    @staticmethod
+    def _object_ids(lesson: LessonPlan) -> dict[str, str]:
+        prefix = VisualIntentCompiler._safe_id(lesson.title)
+        return {
+            "root": f"{prefix}_scene",
+            "evidence": f"{prefix}_evidence",
+        }
+
+    @staticmethod
+    def _routed_shot(
+        pedagogy: PedagogyPlan | None,
+        index: int,
+    ) -> PedagogyShot | None:
+        if pedagogy is None or index >= len(pedagogy.shots):
+            return None
+        return pedagogy.shots[index]
+
+    @staticmethod
+    def _safe_id(value: str) -> str:
+        return re.sub(r"[^a-z0-9_]+", "_", value.casefold()).strip("_") or "lesson"

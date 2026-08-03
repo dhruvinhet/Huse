@@ -3,8 +3,14 @@
 from typing import Literal
 
 from pydantic import BaseModel, Field
+import pytest
 
-from app.agents.base import StructuredGeminiAgent
+from app.agents.base import StructuredAgentError, StructuredGeminiAgent
+from app.agents.storyboard_planner import GeminiStoryboardPlanner
+from app.agents.narration_writer import GeminiNarrationWriter
+from app.domain.generation import AudienceProfile
+from app.domain.lesson import LessonPlan
+from tests.test_domain_v2 import concept_graph, storyboard
 
 
 class TinyArtifact(BaseModel):
@@ -110,3 +116,55 @@ def test_json_artifact_can_follow_model_prose() -> None:
     result = agent.generate("Return a tiny artifact.", {"input": "value"})
 
     assert result.name == "complete"
+
+
+def test_nvidia_prompt_removes_schema_prose_and_payload_indentation() -> None:
+    """NVIDIA receives the same constraints without expensive schema prose."""
+
+    client = StubClient(['{"name":"complete"}'])
+    agent = StructuredGeminiAgent(
+        client, TinyArtifact, "Tiny Planner", max_attempts=1
+    )
+
+    agent.generate("Return a tiny artifact.", {"input": "value"})
+
+    prompt = client.prompts[0]
+    assert "Small artifact used to exercise the retry behavior" not in prompt
+    assert '"input":"value"' in prompt
+    assert '"required":["name"]' in prompt
+
+
+def test_nvidia_storyboard_uses_one_paid_attempt_before_local_fallback() -> None:
+    """Repeated schema guesses are avoided when deterministic fallback exists."""
+
+    client = StubClient(["{}", "{}", "{}"])
+    planner = GeminiStoryboardPlanner(client, max_attempts=3)
+    lesson = LessonPlan(
+        title="Transformation",
+        summary="Transform input to output.",
+        concept_graph=concept_graph(),
+    )
+
+    with pytest.raises(StructuredAgentError):
+        planner.plan(lesson, [], [])
+
+    assert len(client.prompts) == 1
+
+
+def test_nvidia_narration_missing_title_is_normalized_from_storyboard() -> None:
+    """A complete phrase response need not fail because NVIDIA omitted title."""
+
+    client = StubClient([
+        '{"schema_version":"2.0","phrases":['
+        '{"phrase_id":"p1","beat_id":"beat_1","text":"Input becomes output."},'
+        '{"phrase_id":"p2","beat_id":"beat_2","text":"The output is ready."}'
+        ']}'
+    ])
+
+    plan = GeminiNarrationWriter(client).write(
+        storyboard(),
+        AudienceProfile(learning_goal="Understand transformation"),
+    )
+
+    assert plan.title == "Transformation"
+    assert len(client.prompts) == 1

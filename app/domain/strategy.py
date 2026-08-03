@@ -5,7 +5,8 @@ from typing import Literal
 from pydantic import Field
 
 from app.models.base import BaseModel, NonEmptyString
-from app.domain.storyboard import VisualObjectSpec
+from app.domain.pedagogy import PedagogyMode
+from app.domain.storyboard import Storyboard, VisualObjectSpec
 
 
 class VisualStrategy(BaseModel):
@@ -32,3 +33,12 @@ class TemplateMatch(BaseModel):
     prototype: VisualObjectSpec | None = None
     score: float = Field(ge=0, le=1)
     reason: NonEmptyString
+
+
+class CompiledTemplateProgram(BaseModel):
+    """Record an authoritative reviewed-template visual program."""
+
+    template_id: NonEmptyString
+    parameters: dict[str, object] = Field(default_factory=dict)
+    pedagogy_mode: PedagogyMode
+    storyboard: Storyboard

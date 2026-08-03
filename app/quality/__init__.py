@@ -11,6 +11,7 @@ from app.quality.policy import QualityPolicy
 from app.quality.storyboard_critic import GeminiStoryboardCritic
 from app.quality.educational import EducationalQualityEvaluator
 from app.quality.visual import VisualQualityEvaluator
+from app.quality.rendered import RenderedFrameQualityEvaluator
 
 __all__ = [
     "DeterministicQualityEvaluator",
@@ -22,4 +23,5 @@ __all__ = [
     "VisionLanguageClient",
     "EducationalQualityEvaluator",
     "VisualQualityEvaluator",
+    "RenderedFrameQualityEvaluator",
 ]

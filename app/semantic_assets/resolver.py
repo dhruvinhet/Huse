@@ -29,8 +29,12 @@ class CatalogSemanticAssetResolver:
     ) -> None:
         """Store catalog and an editable SVG fallback generator."""
 
-        self._catalog = catalog or AssetCatalog()
-        self._generator = generator or DeterministicLineArtGenerator()
+        self._catalog = catalog if catalog is not None else AssetCatalog()
+        self._generator = (
+            generator
+            if generator is not None
+            else DeterministicLineArtGenerator(self._catalog)
+        )
         self._generated_dir = generated_dir
 
     def resolve(self, storyboard: Storyboard) -> ResolvedAssetSet:
@@ -38,15 +42,16 @@ class CatalogSemanticAssetResolver:
 
         objects = self._storyboard_objects(storyboard)
         resolved: list[ResolvedSemanticAsset] = []
-        seen_queries: set[str] = set()
+        seen_objects: set[tuple[str, str]] = set()
         for item in objects:
             query = item.asset_query
             if query is None:
                 continue
             digest = self._query_digest(query)
-            if digest in seen_queries:
+            identity = (item.object_id, digest)
+            if identity in seen_objects:
                 continue
-            seen_queries.add(digest)
+            seen_objects.add(identity)
             resolved.append(self._resolve_query(item.object_id, query, digest))
         return ResolvedAssetSet(assets=resolved)
 
@@ -78,7 +83,7 @@ class CatalogSemanticAssetResolver:
                     f"catalog asset is missing: {working_path}"
                 )
             return ResolvedSemanticAsset(
-                asset_id=catalog_asset.asset_id,
+                asset_id=f"asset_{object_id}",
                 query_digest=digest,
                 source=AssetSource.CATALOG,
                 path=catalog_asset.path.as_posix(),
@@ -95,14 +100,21 @@ class CatalogSemanticAssetResolver:
             else Path(settings.TEMP_DIR) / "v2" / "semantic_assets" / f"{digest}.svg"
         )
         working_path = self._working_path(configured_path)
-        self._generator.generate(query, working_path)
+        composition = self._generator.plan(query)
+        if not working_path.is_file():
+            self._generator.generate(query, working_path)
+        license_id = (
+            "generated-internal"
+            if composition.diagnostic_fallback
+            else "composed:" + "+".join(composition.license_ids)
+        )
         return ResolvedSemanticAsset(
             asset_id=f"asset_{object_id}",
             query_digest=digest,
             source=AssetSource.GENERATED,
             path=configured_path.as_posix(),
             mime_type="image/svg+xml",
-            license_id="generated-internal",
+            license_id=license_id,
             content_hash=self._file_hash(working_path),
             editable=True,
             ready=True,

@@ -45,8 +45,27 @@ class StructuredGeminiAgent(Generic[OutputT]):
     ) -> OutputT:
         """Generate, validate, and optionally repair one JSON artifact."""
 
+        provider = getattr(self._client, "PROVIDER", "").strip().lower()
         schema = self._output_type.model_json_schema()
-        payload_text = json.dumps(input_payload, ensure_ascii=False, indent=2)
+        if provider == "nvidia":
+            schema = _compact_json_schema(schema)
+            schema_text = json.dumps(
+                schema,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            payload_text = json.dumps(
+                input_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        else:
+            schema_text = json.dumps(schema, ensure_ascii=False)
+            payload_text = json.dumps(
+                input_payload,
+                ensure_ascii=False,
+                indent=2,
+            )
         base_prompt = (
             f"You are the {self._agent_name}.\n\n"
             f"{instructions.strip()}\n\n"
@@ -55,11 +74,10 @@ class StructuredGeminiAgent(Generic[OutputT]):
             "item. Every enum or literal field must use one of its schema values "
             "exactly; never invent a replacement value. "
             "The output must validate against this JSON Schema:\n"
-            f"{json.dumps(schema, ensure_ascii=False)}\n\n"
+            f"{schema_text}\n\n"
             "Input artifact:\n"
             f"{payload_text}"
         )
-        provider = getattr(self._client, "PROVIDER", "").strip().lower()
         previous_response = ""
         previous_error = ""
         for attempt in range(1, self._max_attempts + 1):
@@ -143,6 +161,21 @@ def _is_truncated_json_error(error: ValidationError) -> bool:
         if "eof" in message or "eof" in context:
             return True
     return False
+
+
+def _compact_json_schema(value: object) -> object:
+    """Remove prose-only schema metadata for smaller NVIDIA prompts."""
+
+    if isinstance(value, list):
+        return [_compact_json_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    prose_keys = {"title", "description", "examples", "default"}
+    return {
+        key: _compact_json_schema(item)
+        for key, item in value.items()
+        if key not in prose_keys
+    }
 
 
 def _prepare_json_response(response: str) -> str:

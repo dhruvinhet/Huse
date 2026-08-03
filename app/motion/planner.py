@@ -155,6 +155,11 @@ class SemanticAnimationPlanner:
                         parameters={
                             "beat_purpose": beat.purpose,
                             "sync": "word" if alignment.words else "phrase",
+                            "operation_type": (
+                                operation.operation.value
+                                if operation is not None
+                                else "attention"
+                            ),
                         },
                     )
                 )

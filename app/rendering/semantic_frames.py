@@ -21,6 +21,12 @@ from app.domain.visual_document import ObjectLifecycle, ObjectState, VisualState
 from app.models.render import RenderableObject
 from app.renderers.svg_renderer import SVGRenderer
 from app.renderers.image_renderer import ImageRenderer
+from app.rendering.kinds import SemanticKindRegistry
+from app.rendering.operator_plugins import (
+    OperatorDrawingContext,
+    OperatorRendererRegistry,
+    UnsupportedSemanticKindError,
+)
 from app.utils.debug_recorder import DebugRecorder
 
 
@@ -54,6 +60,17 @@ class SemanticFrameRenderer:
         self._design = WhiteboardDesignSystem()
         self._font_cache: dict[int, ImageFont.ImageFont] = {}
         self._layer_cache: dict[str, _CachedLayer] = {}
+        self._semantic_kinds = SemanticKindRegistry()
+        self._operator_renderers = OperatorRendererRegistry()
+        unsupported = [
+            kind
+            for kind in self._semantic_kinds.names()
+            if not self._operator_renderers.supports(kind)
+        ]
+        if unsupported:
+            raise RuntimeError(
+                f"semantic kinds lack renderer plugins: {unsupported}"
+            )
 
     def render(self, job: RenderJob) -> FrameSequence:
         """Render all manifest frames as a continuous deterministic sequence."""
@@ -69,6 +86,11 @@ class SemanticFrameRenderer:
         events_by_beat: dict[str, list[MotionEvent]] = defaultdict(list)
         for event in job.motion.events:
             events_by_beat[event.beat_id].append(event)
+        self._kind_by_object = {
+            object_id: object_state.kind
+            for state in job.document.states
+            for object_id, object_state in state.object_states.items()
+        }
         cues_by_beat = {cue.beat_id: cue for cue in job.camera.cues}
         samples: list[str] = []
         sample_frames = self._sample_frames(job)
@@ -272,21 +294,22 @@ class SemanticFrameRenderer:
 
         size = (job.layout.viewport.width, job.layout.viewport.height)
         canvas = Image.new("RGBA", size, self.BACKGROUND)
-        event_by_object = {
-            object_id: event
-            for event in events
-            for object_id in event.object_ids
-        }
+        events_by_object: dict[str, list[MotionEvent]] = {}
+        for event in events:
+            for object_id in event.object_ids:
+                events_by_object.setdefault(object_id, []).append(event)
         previous_ids = set(previous_state.object_states) if previous_state else set()
 
         for node in ordered:
             object_state = state.object_states[node.object_id]
             if object_state.lifecycle in {ObjectLifecycle.HIDDEN, ObjectLifecycle.REMOVED}:
                 continue
-            event = event_by_object.get(node.object_id)
+            object_events = events_by_object.get(node.object_id, [])
+            event = self._event_at(object_events, timestamp)
             progress = self._event_progress(event, timestamp)
             is_new = node.object_id not in previous_ids
-            if is_new and event is not None and timestamp < event.start_time:
+            reveal_at = self._reveal_time(object_events)
+            if is_new and reveal_at is not None and timestamp < reveal_at:
                 continue
             final_box = boxes[node.object_id]
             box = final_box
@@ -410,6 +433,7 @@ class SemanticFrameRenderer:
     ) -> None:
         """Draw one semantic kind without inferring educational meaning."""
 
+        self._semantic_kinds.get(state.kind)
         draw = ImageDraw.Draw(layer)
         coordinates = self._coords(box)
         style = self._design.resolve(
@@ -424,81 +448,42 @@ class SemanticFrameRenderer:
         if state.kind == "semantic_asset":
             self._draw_semantic_asset(layer, state, box, job)
             return
-        if state.kind == "histogram_bar":
-            draw.rounded_rectangle(
-                coordinates,
-                radius=10,
-                outline=ink,
-                width=style.stroke_width,
+        self._operator_renderers.draw(
+            OperatorDrawingContext(
+                image=layer,
+                draw=draw,
+                state=state,
+                box=box,
+                boxes=boxes,
+                coordinates=coordinates,
+                ink=ink,
+                fill=style.fill,
+                accent=style.accent,
+                highlight=self.HIGHLIGHT,
+                stroke_width=style.stroke_width,
+                font_size=style.font_size,
+                label=self._label(state),
+                draw_text=self._draw_centered_text,
             )
-            inner = (coordinates[0] + 5, coordinates[1] + 5, coordinates[2] - 5, coordinates[3] - 5)
-            draw.rectangle(inner, fill=style.accent[:3] + (190,))
-            self._draw_centered_text(
-                draw,
-                coordinates,
-                str(state.content.get("label", "")),
-                26,
-                ink,
-            )
-            return
-        if state.kind in {"label", "text", "annotation", "equation"}:
-            self._draw_centered_text(
-                draw,
-                coordinates,
-                self._label(state),
-                style.font_size,
-                ink,
-            )
-            if state.kind == "annotation":
-                draw.line(
-                    (coordinates[0], coordinates[3] - 4, coordinates[2], coordinates[3] - 4),
-                    fill=ink,
-                    width=3,
-                )
-            return
-
-        fill = style.fill
-        if state.lifecycle is ObjectLifecycle.EMPHASIZED:
-            draw.rounded_rectangle(
-                self._expand(coordinates, 12),
-                radius=22,
-                fill=self.HIGHLIGHT,
-            )
-        draw.rounded_rectangle(
-            coordinates,
-            radius=style.corner_radius,
-            fill=fill,
-            outline=ink,
-            width=style.stroke_width,
         )
-        label = self._label(state)
-        if label:
-            if state.child_ids:
-                header_height = min(
-                    86,
-                    max(52, round(box.height * 0.2)),
-                )
-                header = (
-                    coordinates[0] + 16,
-                    coordinates[1] + 8,
-                    coordinates[2] - 16,
-                    min(coordinates[3] - 8, coordinates[1] + header_height),
-                )
-                self._draw_centered_text(
-                    draw,
-                    header,
-                    label,
-                    style.font_size,
-                    ink,
-                )
-            else:
-                self._draw_centered_text(
-                    draw,
-                    coordinates,
-                    label,
-                    style.font_size,
-                    ink,
-                )
+        if any(
+            asset.asset_id == f"asset_{state.object_id}"
+            and not asset.path.startswith("template://")
+            for asset in job.assets.assets
+        ):
+            icon_width = min(78.0, max(36.0, box.width * 0.22))
+            icon_height = min(78.0, max(36.0, box.height * 0.55))
+            self._draw_semantic_asset(
+                layer,
+                state,
+                LayoutBox(
+                    x=box.x + 12,
+                    y=box.y + (box.height - icon_height) / 2,
+                    width=icon_width,
+                    height=icon_height,
+                ),
+                job,
+            )
 
     def _draw_connector(
         self,
@@ -523,8 +508,9 @@ class SemanticFrameRenderer:
             box
             for object_id, box in boxes.items()
             if object_id not in {source_id, target_id, state.object_id}
+            and getattr(self, "_kind_by_object", {}).get(object_id) != "connector"
             and box.width > 4
-            and box.height > 4
+            and box.height > 30
             and not self._contains_point(box, self._center(source))
             and not self._contains_point(box, self._center(target))
         ]
@@ -659,6 +645,18 @@ class SemanticFrameRenderer:
     ) -> list[tuple[float, float]]:
         """Choose the shortest orthogonal route that avoids visible nodes."""
 
+        direct = [start, end]
+        aligned = (
+            horizontal and abs(start[1] - end[1]) < 1e-6
+        ) or (
+            not horizontal and abs(start[0] - end[0]) < 1e-6
+        )
+        if aligned and not any(
+            self._segment_intersects_box(start, end, obstacle)
+            for obstacle in obstacles
+        ):
+            return direct
+
         minimum_x = min(box.x for box in boxes.values())
         maximum_x = max(box.x + box.width for box in boxes.values())
         minimum_y = min(box.y for box in boxes.values())
@@ -789,10 +787,9 @@ class SemanticFrameRenderer:
             None,
         )
         if asset is None or asset.path.startswith("template://"):
-            draw = ImageDraw.Draw(layer)
-            draw.rounded_rectangle(self._coords(box), radius=18, outline=self.INK, width=5)
-            self._draw_centered_text(draw, self._coords(box), self._label(state), 30, self.INK)
-            return
+            raise UnsupportedSemanticKindError(
+                f"semantic asset {state.object_id!r} has no renderable implementation"
+            )
         is_svg = asset.mime_type == "image/svg+xml"
         renderable = RenderableObject(
             object_id=state.object_id,
@@ -1368,6 +1365,40 @@ class SemanticFrameRenderer:
         if timestamp <= event.start_time:
             return 0.0
         return min(1.0, (timestamp - event.start_time) / event.duration)
+
+    @staticmethod
+    def _event_at(
+        events: list[MotionEvent],
+        timestamp: float,
+    ) -> MotionEvent | None:
+        """Select the event that controls pixels now, not a later event."""
+
+        if not events:
+            return None
+        active = [
+            event
+            for event in events
+            if event.start_time <= timestamp < event.start_time + event.duration
+        ]
+        if active:
+            return max(active, key=lambda item: item.start_time)
+        completed = [event for event in events if event.start_time <= timestamp]
+        if completed:
+            return max(completed, key=lambda item: item.start_time)
+        return min(events, key=lambda item: item.start_time)
+
+    @staticmethod
+    def _reveal_time(events: list[MotionEvent]) -> float | None:
+        """Return the object's create/reveal onset independently of later cues."""
+
+        create_events = [
+            event
+            for event in events
+            if event.parameters.get("operation_type") == "create"
+            or str(event.operation_id).startswith("create_")
+        ]
+        candidates = create_events or events
+        return min((event.start_time for event in candidates), default=None)
 
     @staticmethod
     def _cue_progress(cue: CameraCue, timestamp: float) -> float:

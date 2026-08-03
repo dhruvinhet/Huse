@@ -276,3 +276,35 @@ def test_nvidea_provider_alias_is_supported(
 
     assert client.PROVIDER == "nvidia"
     assert client.MODEL_NAME == "test/model"
+
+
+def test_nvidia_retries_one_transient_gateway_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A single 504 does not abort an otherwise successful NVIDIA request."""
+
+    test_settings = SimpleNamespace(
+        AI_PROVIDER="nvidia",
+        NVIDIA_API_KEY="nvidia-test-key",
+        NVIDIA_MODEL="test/model",
+        NVIDIA_BASE_URL="https://example.test/v1",
+        NVIDIA_MAX_TOKENS=4096,
+    )
+    request = httpx.Request(
+        "POST",
+        "https://example.test/v1/chat/completions",
+    )
+    gateway_timeout = httpx.Response(504, request=request)
+    successful = MagicMock()
+    successful.json.return_value = {
+        "choices": [{"message": {"content": "recovered"}}]
+    }
+    post = MagicMock(side_effect=[gateway_timeout, successful])
+    monkeypatch.setattr(gemini_client, "settings", test_settings)
+    monkeypatch.setattr(gemini_client.httpx, "post", post)
+    monkeypatch.setattr(gemini_client, "sleep", MagicMock())
+
+    result = GeminiClient().generate_text("Test prompt")
+
+    assert result == "recovered"
+    assert post.call_count == 2

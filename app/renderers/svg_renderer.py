@@ -1,18 +1,30 @@
-"""Pillow rendering for the limited generated SVG primitive set."""
+"""SVG rendering with cached resvg rasterization and primitive fallback."""
 
+from io import BytesIO
 import re
 from pathlib import Path
 from xml.etree import ElementTree
 
 from loguru import logger
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from app.config.settings import PROJECT_ROOT
 from app.models.render import RenderableObject
 
+try:
+    import resvg_py
+except ImportError:  # pragma: no cover - dependency diagnostics are tested indirectly
+    resvg_py = None
+
 
 class SVGRenderer:
     """Draw line, polygon, rectangle, and circle elements from local SVGs."""
+
+    def __init__(self) -> None:
+        """Initialize a bounded per-renderer raster cache."""
+
+        self._raster_cache: dict[tuple[str, int, int, int], Image.Image] = {}
+        self._raster_cache_limit = 256
 
     def render(self, canvas: Image.Image, obj: RenderableObject) -> bool:
         """Render supported primitive elements from a generated SVG file."""
@@ -30,6 +42,27 @@ class SVGRenderer:
                 svg_path,
             )
             return False
+
+        if resvg_py is not None:
+            try:
+                rendered_icon = self._rasterized(
+                    svg_path,
+                    max(1, int(obj.width)),
+                    max(1, int(obj.height)),
+                )
+                position = (
+                    round(obj.x - obj.width / 2),
+                    round(obj.y - obj.height / 2),
+                )
+                canvas.paste(rendered_icon, position, rendered_icon)
+                return True
+            except (OSError, ValueError) as exc:
+                logger.warning(
+                    "resvg could not rasterize SVG {} ({}); trying the "
+                    "primitive renderer.",
+                    obj.object_id,
+                    exc,
+                )
 
         try:
             root = ElementTree.parse(svg_path).getroot()
@@ -52,6 +85,29 @@ class SVGRenderer:
             )
             return False
         return True
+
+    def _rasterized(self, path: Path, width: int, height: int) -> Image.Image:
+        """Rasterize a general SVG path once for a stable file and target size."""
+
+        key = (str(path.resolve()), path.stat().st_mtime_ns, width, height)
+        cached = self._raster_cache.get(key)
+        if cached is not None:
+            return cached
+        png_bytes = resvg_py.svg_to_bytes(
+            svg_path=str(path),
+            width=width,
+            height=height,
+            shape_rendering="geometric_precision",
+            text_rendering="optimize_legibility",
+            image_rendering="optimize_quality",
+        )
+        with Image.open(BytesIO(png_bytes)) as image:
+            rendered = image.convert("RGBA")
+        if len(self._raster_cache) >= self._raster_cache_limit:
+            oldest = next(iter(self._raster_cache))
+            self._raster_cache.pop(oldest)
+        self._raster_cache[key] = rendered
+        return rendered
 
     def _draw_elements(
         self,
@@ -147,6 +203,59 @@ class SVGRenderer:
                     fill=self._paint(element.get("fill")),
                     outline=self._paint(element.get("stroke", "black")),
                     width=self._stroke_width(element, scale_x, scale_y),
+                )
+                rendered_elements += 1
+            elif tag == "ellipse":
+                center_x, center_y = self._point(
+                    element.get("cx"),
+                    element.get("cy"),
+                    left,
+                    top,
+                    scale_x,
+                    scale_y,
+                )
+                radius_x = self._number(element.get("rx")) * scale_x
+                radius_y = self._number(element.get("ry")) * scale_y
+                drawing.ellipse(
+                    (
+                        center_x - radius_x,
+                        center_y - radius_y,
+                        center_x + radius_x,
+                        center_y + radius_y,
+                    ),
+                    fill=self._paint(element.get("fill")),
+                    outline=self._paint(element.get("stroke", "black")),
+                    width=self._stroke_width(element, scale_x, scale_y),
+                )
+                rendered_elements += 1
+            elif tag == "text" and (element.text or "").strip():
+                x, y = self._point(
+                    element.get("x"),
+                    element.get("y"),
+                    left,
+                    top,
+                    scale_x,
+                    scale_y,
+                )
+                font_size = max(
+                    8,
+                    round(
+                        self._number(element.get("font-size") or "16")
+                        * (scale_x + scale_y)
+                        / 2
+                    ),
+                )
+                try:
+                    font = ImageFont.truetype("arial.ttf", font_size)
+                except OSError:
+                    font = ImageFont.load_default(size=font_size)
+                anchor = "ma" if element.get("text-anchor") == "middle" else "la"
+                drawing.text(
+                    (x, y),
+                    element.text.strip(),
+                    fill=self._paint(element.get("fill", "black")),
+                    font=font,
+                    anchor=anchor,
                 )
                 rendered_elements += 1
 

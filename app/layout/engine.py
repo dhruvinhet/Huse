@@ -115,20 +115,34 @@ class HierarchicalLayoutEngine:
             return _MeasuredNode(item.object_id, item.kind, width, height)
 
         layout, gap = self._layout_preferences(item)
+        content_children = [
+            child for child in children if child.kind != "connector"
+        ] or children
+        overlay_connectors = [
+            child for child in children if child.kind == "connector"
+        ]
         if item.kind == "tree" or layout == "tree":
             width, height = self._layout_tree(children)
         elif item.kind == "graph" or layout == "graph":
             width, height = self._layout_graph(children)
         elif item.kind == "matrix" or layout == "grid":
-            width, height = self._layout_grid(children, gap)
+            width, height = self._layout_grid(content_children, gap)
         elif layout == "horizontal" or item.kind in {
             "array",
             "pipeline",
             "probability_distribution",
         }:
-            width, height = self._layout_linear(children, horizontal=True, gap=gap)
+            width, height = self._layout_linear(
+                content_children, horizontal=True, gap=gap
+            )
         else:
-            width, height = self._layout_linear(children, horizontal=False, gap=gap)
+            width, height = self._layout_linear(
+                content_children, horizontal=False, gap=gap
+            )
+        if layout not in {"tree", "graph"} and item.kind not in {"tree", "graph"}:
+            for connector in overlay_connectors:
+                connector.x = max(0.0, (width - connector.width) / 2)
+                connector.y = max(0.0, (height - connector.height) / 2)
 
         width += 2 * self.CONTAINER_PADDING
         height += 2 * self.CONTAINER_PADDING + self.TITLE_HEIGHT
@@ -152,14 +166,20 @@ class HierarchicalLayoutEngine:
             or item.content.get("value")
             or item.metadata.get("accessibility_label", "")
         )
+        detail = str(item.content.get("detail", "")).strip()
         text_width = max(96.0, min(560.0, 28.0 + len(label) * 15.0))
+        if detail:
+            text_width = max(text_width, min(360.0, 120.0 + len(detail) * 2.2))
         sizes = {
             "label": (text_width, 56.0),
             "text": (text_width, 64.0),
             "annotation": (text_width, 56.0),
             "array_cell": (112.0, 80.0),
             "matrix_cell": (92.0, 68.0),
-            "component": (max(220.0, text_width), 104.0),
+            "component": (
+                max(220.0, text_width),
+                178.0 if detail else 104.0,
+            ),
             "tree_node": (max(112.0, text_width), 76.0),
             "graph_node": (max(112.0, text_width), 76.0),
             "connector": (96.0, 24.0),

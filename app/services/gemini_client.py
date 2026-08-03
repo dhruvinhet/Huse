@@ -1,5 +1,7 @@
 """Provider-aware text-generation client for Gemini and NVIDIA APIs."""
 
+from time import sleep
+
 import httpx
 from google import genai
 from google.genai import errors as genai_errors
@@ -43,6 +45,8 @@ class GeminiClient:
 
     _DEFAULT_PROVIDER = "gemini"
     _NVIDIA_PROVIDER_NAMES = {"nvidia", "nvidea"}
+    _NVIDIA_REQUEST_ATTEMPTS = 2
+    _NVIDIA_RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
 
     @property
     def PROVIDER(self) -> str:
@@ -170,29 +174,58 @@ class GeminiClient:
             "Content-Type": "application/json",
         }
 
-        try:
-            response = httpx.post(
-                f"{base_url}/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=None,
-            )
-            response.raise_for_status()
-            response_payload = response.json()
-        except httpx.TimeoutException as exc:
-            logger.error("NVIDIA request timed out: {}", exc)
-            raise GeminiTimeoutError("NVIDIA request timed out.") from exc
-        except httpx.NetworkError as exc:
-            logger.error("NVIDIA network request failed: {}", exc)
-            raise GeminiNetworkError(
-                "NVIDIA could not be reached due to a network failure."
-            ) from exc
-        except httpx.HTTPError as exc:
-            logger.error("NVIDIA API request failed: {}", exc)
-            raise GeminiAPIError(f"NVIDIA API request failed: {exc}") from exc
-        except ValueError as exc:
-            logger.error("NVIDIA returned invalid JSON: {}", exc)
-            raise GeminiAPIError("NVIDIA returned an invalid JSON response.") from exc
+        response_payload: object | None = None
+        for attempt in range(1, self._NVIDIA_REQUEST_ATTEMPTS + 1):
+            try:
+                response = httpx.post(
+                    f"{base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=None,
+                )
+                response.raise_for_status()
+                response_payload = response.json()
+                break
+            except httpx.TimeoutException as exc:
+                if attempt < self._NVIDIA_REQUEST_ATTEMPTS:
+                    self._log_nvidia_retry(attempt, "transport timeout")
+                    sleep(float(attempt))
+                    continue
+                logger.error("NVIDIA request timed out: {}", exc)
+                raise GeminiTimeoutError("NVIDIA request timed out.") from exc
+            except httpx.NetworkError as exc:
+                if attempt < self._NVIDIA_REQUEST_ATTEMPTS:
+                    self._log_nvidia_retry(attempt, "network failure")
+                    sleep(float(attempt))
+                    continue
+                logger.error("NVIDIA network request failed: {}", exc)
+                raise GeminiNetworkError(
+                    "NVIDIA could not be reached due to a network failure."
+                ) from exc
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if (
+                    status in self._NVIDIA_RETRY_STATUS_CODES
+                    and attempt < self._NVIDIA_REQUEST_ATTEMPTS
+                ):
+                    self._log_nvidia_retry(attempt, f"HTTP {status}")
+                    sleep(float(attempt))
+                    continue
+                logger.error("NVIDIA API request failed: {}", exc)
+                raise GeminiAPIError(
+                    f"NVIDIA API request failed: {exc}"
+                ) from exc
+            except httpx.HTTPError as exc:
+                logger.error("NVIDIA API request failed: {}", exc)
+                raise GeminiAPIError(f"NVIDIA API request failed: {exc}") from exc
+            except ValueError as exc:
+                logger.error("NVIDIA returned invalid JSON: {}", exc)
+                raise GeminiAPIError(
+                    "NVIDIA returned an invalid JSON response."
+                ) from exc
+
+        if response_payload is None:
+            raise GeminiAPIError("NVIDIA returned no response payload.")
 
         response_text = _extract_nvidia_response_text(response_payload)
         if not response_text:
@@ -206,6 +239,16 @@ class GeminiClient:
         )
         logger.debug("NVIDIA response text: {}", stripped_text)
         return stripped_text
+
+    @staticmethod
+    def _log_nvidia_retry(attempt: int, reason: str) -> None:
+        """Record one bounded retry without logging secrets or response bodies."""
+
+        logger.warning(
+            "NVIDIA request attempt {} failed with {}; retrying once.",
+            attempt,
+            reason,
+        )
 
 
 def _extract_nvidia_response_text(payload: object) -> str:

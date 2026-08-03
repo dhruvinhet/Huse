@@ -8,6 +8,13 @@ from app.domain.layout import (
     LayoutConstraint,
 )
 from app.domain.storyboard import VisualObjectSpec
+from app.domain.visual_intent import RendererOperator
+from app.templates.operator_templates import (
+    GenericOperatorParameters,
+    OperatorTemplate,
+    SemanticOperatorCompiler,
+    operator_template,
+)
 
 
 def _identifier(parameters: dict[str, object], fallback: str) -> str:
@@ -128,6 +135,20 @@ class PipelineTemplate:
 
         object_id = _identifier(parameters, "Pipeline_001")
         stages = _strings(parameters.get("stages"), ["Input", "Process", "Output"])
+        if isinstance(parameters.get("concepts"), list) and parameters["concepts"]:
+            validated = GenericOperatorParameters.model_validate({
+                "object_id": object_id,
+                "label": str(parameters.get("label", "Pipeline")),
+                "operands": stages,
+                "concepts": parameters["concepts"],
+                "relations": parameters.get("relations", []),
+            })
+            return SemanticOperatorCompiler().compile(
+                RendererOperator.PROCESS,
+                validated,
+            )
+        raw_details = parameters.get("stage_details")
+        details = raw_details if isinstance(raw_details, list) else []
         children: list[VisualObjectSpec] = []
         stage_ids: list[str] = []
         for index, stage in enumerate(stages):
@@ -138,11 +159,32 @@ class PipelineTemplate:
                     object_id=stage_id,
                     kind="component",
                     semantic_role="pipeline_stage",
-                    content={"label": stage, "order": index},
+                    content={
+                        "label": stage,
+                        "order": index,
+                        "detail": (
+                            str(details[index].get("detail", "")).strip()
+                            if index < len(details)
+                            and isinstance(details[index], dict)
+                            else ""
+                        ),
+                    },
                     accessibility_label=f"Pipeline stage {stage}",
                 )
             )
         for index in range(len(stage_ids) - 1):
+            relation = (
+                details[index].get("relation_to_next")
+                if index < len(details) and isinstance(details[index], dict)
+                else "flows_to"
+            )
+            if not isinstance(relation, str) or not relation.strip():
+                continue
+            relation_label = (
+                details[index].get("relation_label")
+                if index < len(details) and isinstance(details[index], dict)
+                else ""
+            )
             children.append(
                 VisualObjectSpec(
                     object_id=f"{object_id}_connector_{index:03d}",
@@ -151,7 +193,12 @@ class PipelineTemplate:
                     content={
                         "source_id": stage_ids[index],
                         "target_id": stage_ids[index + 1],
-                        "label": "",
+                        "relation": relation,
+                        "label": (
+                            str(relation_label).strip()
+                            if relation_label is not None
+                            else ""
+                        ),
                     },
                     style_token="process.active",
                     accessibility_label=(
@@ -159,13 +206,16 @@ class PipelineTemplate:
                     ),
                 )
             )
-        return _container(
+        root = _container(
             object_id,
             "pipeline",
             str(parameters.get("label", "Pipeline")),
             children,
             "horizontal",
         )
+        if any(child.kind == "connector" for child in children):
+            root.content["connector_mode"] = "explicit"
+        return root
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,169 +384,65 @@ class TransformerBlockTemplate:
     )
 
     def instantiate(self, parameters: dict[str, object]) -> VisualObjectSpec:
-        """Build nested attention, normalization, and feed-forward components."""
+        """Compile explicit neural layers and tensor-flow state."""
 
-        object_id = _identifier(parameters, "TransformerBlock_001")
-        components = [
-            ("attention", "Multi-Head Attention"),
-            ("residual_1", "Residual + LayerNorm"),
-            ("feed_forward", "Feed-Forward Network"),
-            ("residual_2", "Residual + LayerNorm"),
-        ]
-        children = [
-            VisualObjectSpec(
-                object_id=f"{object_id}_{suffix}",
-                kind="component",
-                semantic_role=suffix,
-                content={"label": label, "order": index},
-                style_token=(
-                    "process.active" if suffix in {"attention", "feed_forward"}
-                    else "annotation"
-                ),
-                accessibility_label=label,
-            )
-            for index, (suffix, label) in enumerate(components)
-        ]
-        return _container(
-            object_id,
-            "transformer_block",
-            str(parameters.get("label", "Transformer Block")),
-            children,
-            "vertical",
-        )
+        return operator_template(
+            self.template_id,
+            set(self.keywords),
+            RendererOperator.NEURAL_NETWORK,
+            "Transformer Block",
+            (
+                "Embedding",
+                "Multi-head attention",
+                "Residual normalization",
+                "Feed-forward network",
+            ),
+        ).instantiate(parameters)
 
 
-@dataclass(frozen=True, slots=True)
-class DeclarativeTopicTemplate:
-    """Create a professional labeled diagram from a reviewed topic recipe."""
-
-    template_id: str
-    keywords: frozenset[str]
-    diagram_kind: str
-    default_label: str
-    components: tuple[str, ...]
-    layout: str = "horizontal"
-
-    def instantiate(self, parameters: dict[str, object]) -> VisualObjectSpec:
-        """Build reviewed components and explicit flow connectors."""
-
-        object_id = _identifier(
-            parameters,
-            self.template_id.replace(".", "_").title(),
-        )
-        labels = _strings(parameters.get("components"), list(self.components))
-        children: list[VisualObjectSpec] = []
-        component_ids: list[str] = []
-        for index, label in enumerate(labels):
-            child_id = f"{object_id}_component_{index:03d}"
-            component_ids.append(child_id)
-            children.append(
-                VisualObjectSpec(
-                    object_id=child_id,
-                    kind=(
-                        "array_cell" if self.diagram_kind in {"array", "hash_table"}
-                        else "tree_node" if self.diagram_kind == "tree"
-                        else "graph_node" if self.diagram_kind == "graph"
-                        else "component"
-                    ),
-                    semantic_role=f"{self.template_id}_step",
-                    content={"label": label, "order": index},
-                    accessibility_label=label,
-                )
-            )
-        if self.diagram_kind in {
-            "pipeline", "graph", "blockchain", "linked_list", "timeline",
-            "cycle", "cause_effect", "flowchart", "architecture",
-            "equation_derivation", "code_trace",
-        }:
-            for index in range(len(component_ids) - 1):
-                children.append(
-                    VisualObjectSpec(
-                        object_id=f"{object_id}_connector_{index:03d}",
-                        kind="connector",
-                        semantic_role="flow",
-                        content={
-                            "source_id": component_ids[index],
-                            "target_id": component_ids[index + 1],
-                            "label": "",
-                        },
-                        style_token="process.active",
-                        accessibility_label=(
-                            f"Flow from {labels[index]} to {labels[index + 1]}"
-                        ),
-                    )
-                )
-        return _container(
-            object_id,
-            self.diagram_kind,
-            str(parameters.get("label", self.default_label)),
-            children,
-            self.layout,
-        )
-
-
-def topic_templates() -> list[DeclarativeTopicTemplate]:
-    """Return reviewed templates for the initial educational topic library."""
+def topic_templates() -> list[OperatorTemplate]:
+    """Return reviewed topic families backed by procedural operators."""
 
     definitions = [
-        ("binary_search.v1", {"binary", "search"}, "array", "Binary Search", ("Low", "Middle", "High"), "horizontal"),
-        ("quick_sort.v1", {"quick", "quicksort", "sort"}, "array", "Quick Sort", ("Partition", "Pivot", "Left", "Right"), "horizontal"),
-        ("merge_sort.v1", {"merge", "mergesort", "sort"}, "tree", "Merge Sort", ("Input", "Split", "Subarrays", "Merge"), "tree"),
-        ("dfs.v1", {"dfs", "depth", "first"}, "graph", "Depth-First Search", ("Start", "Explore", "Backtrack", "Complete"), "graph"),
-        ("bfs.v1", {"bfs", "breadth", "first"}, "graph", "Breadth-First Search", ("Start", "Queue", "Frontier", "Visited"), "graph"),
-        ("cnn.v1", {"cnn", "convolutional"}, "pipeline", "Convolutional Neural Network", ("Image", "Convolution", "Pooling", "Classifier"), "horizontal"),
-        ("rnn.v1", {"rnn", "recurrent"}, "pipeline", "Recurrent Neural Network", ("Input t", "Hidden State", "Input t+1", "Output"), "horizontal"),
-        ("tcp_handshake.v1", {"tcp", "handshake"}, "timeline", "TCP Handshake", ("SYN", "SYN-ACK", "ACK", "Connected"), "horizontal"),
-        ("rest_api.v1", {"rest", "api"}, "pipeline", "REST API", ("Client", "HTTP Request", "Server", "JSON Response"), "horizontal"),
-        ("microservices.v1", {"microservices", "service"}, "graph", "Microservices", ("Gateway", "Service A", "Service B", "Database"), "graph"),
-        ("database_index.v1", {"database", "index", "btree"}, "tree", "Database Index", ("Root Page", "Index Pages", "Leaf Pages", "Rows"), "tree"),
-        ("os_scheduling.v1", {"scheduling", "scheduler", "process"}, "timeline", "OS Scheduling", ("Ready", "Running", "Waiting", "Complete"), "horizontal"),
-        ("memory_allocation.v1", {"memory", "allocation", "heap"}, "array", "Memory Allocation", ("Code", "Stack", "Free", "Heap"), "vertical"),
-        ("hash_map.v1", {"hash", "map", "table"}, "hash_table", "Hash Map", ("Key", "Hash", "Bucket", "Value"), "horizontal"),
-        ("blockchain.v1", {"blockchain", "block", "ledger"}, "blockchain", "Blockchain", ("Block 1", "Block 2", "Block 3", "Consensus"), "horizontal"),
-        ("authentication.v1", {"authentication", "auth", "login"}, "pipeline", "Authentication", ("Credentials", "Identity Check", "Token", "Protected Resource"), "horizontal"),
-        ("system_design.v1", {"system", "design", "architecture"}, "graph", "System Design", ("Client", "Load Balancer", "Services", "Data Stores"), "graph"),
+        ("binary_search.v1", {"binary", "search"}, RendererOperator.BINARY_SEARCH, "Binary Search", ("sorted values", "low high mid pointers", "comparison", "code trace")),
+        ("quick_sort.v1", {"quick", "quicksort", "sort"}, RendererOperator.SORTING, "Quick Sort", ("values", "pivot", "partition range")),
+        ("merge_sort.v1", {"merge", "mergesort", "sort"}, RendererOperator.SORTING, "Merge Sort", ("values", "active ranges", "merge phase")),
+        ("dfs.v1", {"dfs", "depth", "first"}, RendererOperator.GRAPH_TRAVERSAL, "Depth-First Search", ("nodes", "edges", "stack frontier", "visited")),
+        ("bfs.v1", {"bfs", "breadth", "first"}, RendererOperator.GRAPH_TRAVERSAL, "Breadth-First Search", ("nodes", "edges", "queue frontier", "visited")),
+        ("cnn.v1", {"cnn", "convolutional"}, RendererOperator.NEURAL_NETWORK, "Convolutional Neural Network", ("image tensor", "convolution", "pooling", "classifier")),
+        ("rnn.v1", {"rnn", "recurrent"}, RendererOperator.NEURAL_NETWORK, "Recurrent Neural Network", ("input timestep", "hidden state", "recurrent edge", "output")),
+        ("tcp_handshake.v1", {"tcp", "handshake"}, RendererOperator.PROTOCOL, "TCP Handshake", ("client server", "SYN", "SYN-ACK", "ACK")),
+        ("rest_api.v1", {"rest", "api"}, RendererOperator.PROTOCOL, "REST API", ("client server", "HTTP request", "handler", "JSON response")),
+        ("microservices.v1", {"microservices", "service"}, RendererOperator.SYSTEM, "Microservices", ("gateway", "services", "data stores", "typed edges")),
+        ("database_index.v1", {"database", "index", "btree"}, RendererOperator.TREE_INDEX, "Database Index", ("root page", "index pages", "leaf page", "lookup path")),
+        ("os_scheduling.v1", {"scheduling", "scheduler", "process"}, RendererOperator.SCHEDULING, "OS Scheduling", ("ready queue", "CPU", "waiting", "completion timeline")),
+        ("memory_allocation.v1", {"memory", "allocation", "heap"}, RendererOperator.MEMORY_MAP, "Memory Allocation", ("addresses", "code", "stack", "free space", "heap")),
+        ("hash_map.v1", {"hash", "map", "table"}, RendererOperator.HASH_MAP, "Hash Map", ("key", "hash value", "bucket index", "stored value")),
+        ("blockchain.v1", {"blockchain", "block", "ledger"}, RendererOperator.BLOCKCHAIN, "Blockchain", ("blocks", "previous hashes", "active block", "chain validity")),
+        ("authentication.v1", {"authentication", "auth", "login"}, RendererOperator.PROTOCOL, "Authentication", ("client resource", "credentials", "identity check", "token")),
+        ("system_design.v1", {"system", "design", "architecture"}, RendererOperator.SYSTEM, "System Design", ("client", "load balancer", "services", "data stores")),
     ]
-    return [
-        DeclarativeTopicTemplate(
-            template_id=template_id,
-            keywords=frozenset(keywords),
-            diagram_kind=kind,
-            default_label=label,
-            components=components,
-            layout=layout,
-        )
-        for template_id, keywords, kind, label, components, layout in definitions
-    ]
+    return [operator_template(*definition) for definition in definitions]
 
 
-def educational_templates() -> list[DeclarativeTopicTemplate]:
-    """Return reusable visual grammars that work across subject areas."""
+def educational_templates() -> list[OperatorTemplate]:
+    """Return reusable educational grammars as procedural operators."""
 
     definitions = [
-        ("before_after.v1", {"before", "after", "change", "improve"}, "comparison", "Before and After", ("Before", "Change", "After"), "horizontal"),
-        ("comparison.v1", {"compare", "versus", "difference", "tradeoff"}, "comparison", "Comparison", ("Option A", "Criteria", "Option B"), "horizontal"),
-        ("timeline.v1", {"timeline", "history", "sequence", "stages"}, "timeline", "Timeline", ("Beginning", "Development", "Result"), "horizontal"),
-        ("cycle.v1", {"cycle", "loop", "repeat", "lifecycle"}, "cycle", "Cycle", ("Start", "Process", "Feedback", "Repeat"), "graph"),
-        ("cause_effect.v1", {"cause", "effect", "impact", "because"}, "cause_effect", "Cause and Effect", ("Cause", "Mechanism", "Effect"), "horizontal"),
-        ("input_output.v1", {"input", "output", "function", "mapping"}, "pipeline", "Input to Output", ("Input", "Transformation", "Output"), "horizontal"),
-        ("layered_architecture.v1", {"layer", "architecture", "stack", "tier"}, "architecture", "Layered Architecture", ("Interface", "Logic", "Data"), "vertical"),
-        ("flowchart.v1", {"flowchart", "decision", "branch", "condition"}, "flowchart", "Decision Flow", ("Input", "Decision", "Path A", "Path B"), "graph"),
-        ("funnel.v1", {"funnel", "filter", "conversion", "narrow"}, "funnel", "Funnel", ("All Inputs", "Filtered", "Selected"), "vertical"),
-        ("venn.v1", {"venn", "overlap", "intersection", "union"}, "venn", "Set Relationship", ("Set A", "Shared", "Set B"), "horizontal"),
-        ("bar_chart.v1", {"bar", "chart", "compare", "quantity"}, "bar_chart", "Bar Chart", ("Category A", "Category B", "Category C"), "horizontal"),
-        ("line_chart.v1", {"line", "trend", "growth", "over time"}, "line_chart", "Trend", ("Start", "Middle", "End"), "horizontal"),
-        ("equation_derivation.v1", {"equation", "derive", "formula", "proof"}, "equation_derivation", "Equation Derivation", ("Known", "Substitute", "Simplify", "Result"), "vertical"),
-        ("code_trace.v1", {"code", "trace", "execute", "debug"}, "code_trace", "Code Trace", ("Statement", "State Change", "Next Step", "Result"), "vertical"),
+        ("before_after.v1", {"before", "after", "change", "improve"}, RendererOperator.COMPARISON, "Before and After", ("before state", "change evidence", "after state")),
+        ("comparison.v1", {"compare", "versus", "difference", "tradeoff"}, RendererOperator.COMPARISON, "Comparison", ("option A", "shared criteria", "option B")),
+        ("concept_set.v1", {"collection", "framework", "principle", "rule", "law", "type", "category"}, RendererOperator.COMPARISON, "Concept Collection", ("co-equal members", "defining evidence", "scope", "shared framework")),
+        ("timeline.v1", {"timeline", "history", "sequence", "stages"}, RendererOperator.TIMELINE, "Timeline", ("events", "dates", "turning points")),
+        ("cycle.v1", {"cycle", "loop", "repeat", "lifecycle"}, RendererOperator.CYCLE, "Cycle", ("states", "feedback edge", "repeat condition")),
+        ("cause_effect.v1", {"cause", "effect", "impact", "because"}, RendererOperator.CAUSE_EFFECT, "Cause and Effect", ("cause", "mechanism", "effect")),
+        ("input_output.v1", {"input", "output", "function", "mapping"}, RendererOperator.PROCESS, "Input to Output", ("input", "transformation", "output")),
+        ("layered_architecture.v1", {"layer", "architecture", "stack", "tier"}, RendererOperator.LAYERED, "Layered Architecture", ("interface layer", "logic layer", "data layer")),
+        ("flowchart.v1", {"flowchart", "decision", "branch", "condition"}, RendererOperator.FLOWCHART, "Decision Flow", ("input", "decision", "true branch", "false branch")),
+        ("funnel.v1", {"funnel", "filter", "conversion", "narrow"}, RendererOperator.FUNNEL, "Funnel", ("all inputs", "filter stages", "selected result")),
+        ("venn.v1", {"venn", "overlap", "intersection", "union"}, RendererOperator.VENN, "Set Relationship", ("set A", "intersection", "set B")),
+        ("bar_chart.v1", {"bar", "chart", "compare", "quantity"}, RendererOperator.BAR_CHART, "Bar Chart", ("categories", "numeric values", "baseline")),
+        ("line_chart.v1", {"line", "trend", "growth", "over time"}, RendererOperator.LINE_CHART, "Trend", ("time points", "values", "trend")),
+        ("equation_derivation.v1", {"equation", "derive", "formula", "proof"}, RendererOperator.EQUATION, "Equation Derivation", ("known expression", "substitution", "simplification", "result")),
+        ("code_trace.v1", {"code", "trace", "execute", "debug"}, RendererOperator.CODE_TRACE, "Code Trace", ("active statement", "variable state", "control flow", "result")),
     ]
-    return [
-        DeclarativeTopicTemplate(
-            template_id=template_id,
-            keywords=frozenset(keywords),
-            diagram_kind=kind,
-            default_label=label,
-            components=components,
-            layout=layout,
-        )
-        for template_id, keywords, kind, label, components, layout in definitions
-    ]
+    return [operator_template(*definition) for definition in definitions]

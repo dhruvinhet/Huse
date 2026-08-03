@@ -22,7 +22,11 @@ class VisualKnowledgeBase(Protocol):
 class TemplateLibrary(Protocol):
     """Match and instantiate reusable educational diagrams."""
 
-    def match(self, graph: ConceptGraph) -> list[TemplateMatch]:
+    def match(
+        self,
+        graph: ConceptGraph,
+        audience: AudienceProfile | None = None,
+    ) -> list[TemplateMatch]:
         """Return ranked templates for graph concepts."""
 
     def instantiate(

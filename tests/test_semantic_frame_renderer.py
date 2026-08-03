@@ -6,15 +6,21 @@ from unittest.mock import MagicMock
 from PIL import Image, ImageChops, ImageDraw
 
 from app.camera import SemanticCameraPlanner
-from app.domain.assets import ResolvedAssetSet
+from app.domain.assets import (
+    AssetSource,
+    ResolvedAssetSet,
+    ResolvedSemanticAsset,
+)
 from app.domain.camera import CameraCue, CameraOperation, CameraPlan
 from app.domain.layout import LayoutBox, Viewport
-from app.domain.motion import MotionPlan
-from app.domain.rendering import RenderJob
+from app.domain.motion import MotionEvent, MotionPlan
+from app.domain.rendering import FrameSequence, RenderJob
 from app.domain.visual_document import ObjectState, VisualState
 from app.layout import HierarchicalLayoutEngine
 from app.motion import SemanticAnimationPlanner
 from app.rendering import SemanticFrameRenderer
+from app.rendering.operator_plugins import OperatorRendererRegistry
+from app.quality import RenderedFrameQualityEvaluator
 from app.state import VisualStateTransitionEngine
 from app.timeline import PhraseManifestBuilder
 from tests.test_domain_v2 import storyboard
@@ -224,3 +230,117 @@ def test_adaptive_text_stays_inside_its_layout_box() -> None:
     assert painted[1] >= box[1]
     assert painted[2] <= box[2]
     assert painted[3] <= box[3]
+
+
+def test_future_highlight_does_not_hide_an_already_created_object() -> None:
+    """Renderer event selection respects create time instead of list order."""
+
+    events = [
+        MotionEvent(
+            event_id="create",
+            beat_id="beat",
+            operation_id="create_root",
+            object_ids=["root"],
+            strategy="stage_flow",
+            start_time=0,
+            duration=1,
+            parameters={"operation_type": "create"},
+        ),
+        MotionEvent(
+            event_id="highlight",
+            beat_id="beat",
+            operation_id="highlight_root",
+            object_ids=["root"],
+            strategy="pulse_highlight",
+            start_time=5,
+            duration=1,
+            parameters={"operation_type": "highlight"},
+        ),
+    ]
+
+    renderer = SemanticFrameRenderer()
+
+    assert renderer._event_at(events, 2).event_id == "create"
+    assert renderer._reveal_time(events) == 0
+
+
+def test_component_kind_resolves_to_evidence_card_plugin() -> None:
+    """Leaf components must not be overwritten by a container registration."""
+
+    registry = OperatorRendererRegistry()
+
+    assert registry._kinds["component"].__class__.__name__ == "CardPlugin"
+
+
+def test_component_card_renders_its_resolved_semantic_asset(tmp_path: Path) -> None:
+    """Asset queries enrich concept cards instead of remaining unused metadata."""
+
+    icon = tmp_path / "icon.svg"
+    icon.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">'
+        '<circle cx="32" cy="32" r="25" fill="none" stroke="#1261a0" '
+        'stroke-width="8"/></svg>',
+        encoding="utf-8",
+    )
+    job = MagicMock()
+    job.assets = ResolvedAssetSet(assets=[
+        ResolvedSemanticAsset(
+            asset_id="asset_concept",
+            query_digest="digest",
+            source=AssetSource.GENERATED,
+            path=icon.as_posix(),
+            mime_type="image/svg+xml",
+            license_id="generated-internal",
+            content_hash="hash",
+            editable=True,
+            ready=True,
+        )
+    ])
+    canvas = Image.new("RGBA", (500, 240), (255, 255, 255, 255))
+    state = ObjectState(
+        object_id="concept",
+        kind="component",
+        content={
+            "label": "General concept",
+            "detail": "Grounded explanatory evidence.",
+            "asset_slot": "left",
+        },
+    )
+
+    SemanticFrameRenderer()._draw_object(
+        canvas,
+        state,
+        LayoutBox(x=40, y=30, width=420, height=180),
+        {"concept": LayoutBox(x=40, y=30, width=420, height=180)},
+        job,
+    )
+
+    left_crop = canvas.crop((50, 70, 140, 170)).convert("RGB")
+    white = Image.new("RGB", left_crop.size, "white")
+    assert ImageChops.difference(left_crop, white).getbbox() is not None
+
+
+def test_rendered_pixel_gate_rejects_a_blank_opening(tmp_path: Path) -> None:
+    """Pixel QA catches renderer defects even when multimodal QA is disabled."""
+
+    for number in range(1, 13):
+        image = Image.new("RGB", (320, 180), "white")
+        if number >= 10:
+            ImageDraw.Draw(image).rectangle((40, 30, 280, 150), fill="black")
+        image.save(tmp_path / f"frame_{number:06d}.png")
+    frames = FrameSequence(
+        folder=tmp_path.as_posix(),
+        total_frames=12,
+        fps=4,
+        sample_paths=[
+            (tmp_path / "frame_000001.png").as_posix(),
+            (tmp_path / "frame_000012.png").as_posix(),
+        ],
+    )
+
+    report = RenderedFrameQualityEvaluator().evaluate(frames)
+
+    assert report.decision.value == "repair"
+    assert "rendered_opening_blank" in {
+        finding.code for finding in report.findings
+    }

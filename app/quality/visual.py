@@ -31,6 +31,29 @@ class VisualQualityEvaluator:
         checked = 0
         violations = 0
         for state_id, root in layout.state_roots.items():
+            for content_root in root.children:
+                width_ratio = content_root.box.width / layout.viewport.width
+                height_ratio = content_root.box.height / layout.viewport.height
+                area_ratio = width_ratio * height_ratio
+                linear_kind = content_root.kind in {
+                    "array", "timeline", "pipeline", "linked_list", "queue"
+                }
+                if area_ratio < 0.12 or (
+                    not linear_kind and height_ratio < 0.20
+                ):
+                    violations += 1
+                    findings.append(
+                        self._finding(
+                            "canvas_underused",
+                            FindingSeverity.ERROR,
+                            content_root.object_id,
+                            (
+                                f"Primary visual uses only {area_ratio:.0%} of the "
+                                f"canvas area in {state_id}; its structure is too "
+                                "small or flat for the selected operator."
+                            ),
+                        )
+                    )
             for node in self._flatten(root):
                 checked += 1
                 if not self._inside(node.box, layout):

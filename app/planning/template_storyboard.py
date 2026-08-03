@@ -1,18 +1,16 @@
-"""Deterministic template-guided storyboard planner and fallback."""
+"""Compatibility planner that compiles template metadata through visual intent."""
+
+from math import ceil
 
 from app.domain.lesson import LessonPlan
-from app.domain.operations import OperationType, VisualOperation
-from app.domain.storyboard import (
-    AttentionCue,
-    Storyboard,
-    VisualBeat,
-    VisualObjectSpec,
-)
+from app.domain.storyboard import Storyboard
 from app.domain.strategy import TemplateMatch, VisualStrategy
+from app.domain.visual_intent import RendererOperator, ShotSpec, VisualIntent
+from app.planning.visual_intent_compiler import VisualIntentCompiler
 
 
 class TemplateStoryboardPlanner:
-    """Create an evolving storyboard from matched reviewed templates."""
+    """Convert matched template families to intent, never scene objects."""
 
     def plan(
         self,
@@ -20,114 +18,127 @@ class TemplateStoryboardPlanner:
         strategies: list[VisualStrategy],
         templates: list[TemplateMatch],
     ) -> Storyboard:
-        """Build one progressively connected beat per concept."""
+        """Compile one operator-level shot per concept plus a summary."""
 
         del strategies
-        matches_by_concept: dict[str, TemplateMatch] = {}
-        for match in templates:
-            for concept_id in match.concept_ids:
-                current = matches_by_concept.get(concept_id)
-                if current is None or match.score > current.score:
-                    matches_by_concept[concept_id] = match
-        nodes = {
+        operator = self._operator(templates)
+        by_id = {
             node.concept_id: node
             for node in lesson.concept_graph.nodes
         }
-        beats: list[VisualBeat] = []
-        previous_root_id: str | None = None
-        duration = max(2.0, 60.0 / len(lesson.concept_graph.teaching_sequence))
-        for index, concept_id in enumerate(
-            lesson.concept_graph.teaching_sequence,
-            start=1,
-        ):
-            node = nodes[concept_id]
-            match = matches_by_concept.get(concept_id)
-            root = (
-                match.prototype.model_copy(deep=True)
-                if match is not None and match.prototype is not None
-                else self._fallback_object(node.concept_id, node.label, node.definition)
-            )
-            root.concept_ids = sorted(set([*root.concept_ids, concept_id]))
-            operations = [
-                VisualOperation(
-                    operation_id=f"create_{concept_id}",
-                    operation=OperationType.CREATE,
-                    target_ids=[root.object_id],
-                    arguments={"objects": [root.model_dump(mode="json")]},
-                )
-            ]
-            if previous_root_id is not None:
-                connector = VisualObjectSpec(
-                    object_id=f"connector_{index - 1}_{index}",
-                    kind="connector",
-                    semantic_role="teaching_progression",
-                    concept_ids=[concept_id],
-                    content={
-                        "source_id": previous_root_id,
-                        "target_id": root.object_id,
-                        "label": "next",
-                    },
-                    style_token="process.active",
-                    accessibility_label=(
-                        f"Teaching progression from the prior concept to {node.label}"
+        sequence = list(lesson.concept_graph.teaching_sequence)
+        chunk = max(1, ceil(len(sequence) / min(5, len(sequence))))
+        groups = [
+            sequence[index:index + chunk]
+            for index in range(0, len(sequence), chunk)
+        ]
+        shots = []
+        for index, concept_ids in enumerate(groups):
+            shots.append(
+                ShotSpec(
+                    shot_id=f"concept_{index + 1:03d}",
+                    concept_ids=concept_ids,
+                    relation=next(
+                        (
+                            edge.relation
+                            for edge in lesson.concept_graph.edges
+                            if {edge.source_id, edge.target_id}.intersection(
+                                concept_ids
+                            )
+                        ),
+                        None,
                     ),
-                )
-                operations.append(
-                    VisualOperation(
-                        operation_id=f"connect_{index - 1}_{index}",
-                        operation=OperationType.CREATE,
-                        target_ids=[connector.object_id],
-                        arguments={
-                            "objects": [connector.model_dump(mode="json")]
-                        },
-                    )
-                )
-                operations.append(
-                    VisualOperation(
-                        operation_id=f"dim_{index - 1}",
-                        operation=OperationType.DIM,
-                        target_ids=[previous_root_id],
-                    )
-                )
-            beats.append(
-                VisualBeat(
-                    beat_id=f"beat_{index:03d}_{concept_id}",
-                    section_id=f"section_{index:03d}",
-                    concept_ids=[concept_id],
-                    teaching_intent=f"Teach {node.label}",
-                    phrase_intent=node.definition,
-                    estimated_duration=duration,
-                    operations=operations,
-                    attention=[
-                        AttentionCue(
-                            cue="focus",
-                            target_ids=[root.object_id],
-                            intensity=min(1.0, 0.5 + node.importance / 2),
-                        )
-                    ],
+                    focal_object=self._bounded_join(
+                        [by_id[item].label for item in concept_ids],
+                        " / ",
+                        120,
+                    ),
+                    evidence=self._bounded_join(
+                        [by_id[item].definition for item in concept_ids],
+                        " ",
+                        280,
+                    ),
+                    transformation=(
+                        "Reveal the reviewed operator state for these concepts."
+                    ),
+                    renderer_operator=operator,
                 )
             )
-            previous_root_id = root.object_id
-        return Storyboard(
-            document_id="template_storyboard",
-            title=lesson.title,
-            beats=beats,
-            final_learning_summary=lesson.concept_graph.objectives,
+        shots.append(
+            ShotSpec(
+                shot_id="summary",
+                concept_ids=list(lesson.concept_graph.teaching_sequence),
+                relation=None,
+                focal_object=lesson.title,
+                evidence=self._bounded_join(
+                    list(lesson.concept_graph.objectives),
+                    "; ",
+                    280,
+                ),
+                transformation="Show the complete reviewed operator state.",
+                renderer_operator=operator,
+            )
+        )
+        return VisualIntentCompiler().compile(
+            VisualIntent(lesson_focus=lesson.title, shots=shots),
+            lesson,
         )
 
     @staticmethod
-    def _fallback_object(
-        concept_id: str,
-        label: str,
-        definition: str,
-    ) -> VisualObjectSpec:
-        """Create a labeled semantic component when no template matches."""
+    def _bounded_join(
+        parts: list[str],
+        separator: str,
+        limit: int,
+    ) -> str:
+        """Join complete factual clauses within the intent size contract."""
 
-        return VisualObjectSpec(
-            object_id=f"{concept_id}_visual",
-            kind="component",
-            semantic_role="concept_explanation",
-            concept_ids=[concept_id],
-            content={"label": label, "definition": definition},
-            accessibility_label=f"{label}: {definition}",
+        result: list[str] = []
+        for part in parts:
+            candidate = separator.join([*result, part])
+            if len(candidate) > limit:
+                break
+            result.append(part)
+        if result:
+            return separator.join(result)
+        return parts[0][:limit].rstrip() if parts else "Lesson concept"
+
+    @staticmethod
+    def _operator(templates: list[TemplateMatch]) -> RendererOperator:
+        template_id = templates[0].template_id if templates else ""
+        mappings = {
+            "binary_search": RendererOperator.BINARY_SEARCH,
+            "quick_sort": RendererOperator.SORTING,
+            "merge_sort": RendererOperator.SORTING,
+            "dfs": RendererOperator.GRAPH_TRAVERSAL,
+            "bfs": RendererOperator.GRAPH_TRAVERSAL,
+            "cnn": RendererOperator.NEURAL_NETWORK,
+            "rnn": RendererOperator.NEURAL_NETWORK,
+            "tcp": RendererOperator.PROTOCOL,
+            "rest_api": RendererOperator.PROTOCOL,
+            "microservices": RendererOperator.SYSTEM,
+            "system_design": RendererOperator.SYSTEM,
+            "database_index": RendererOperator.TREE_INDEX,
+            "scheduling": RendererOperator.SCHEDULING,
+            "memory": RendererOperator.MEMORY_MAP,
+            "hash_map": RendererOperator.HASH_MAP,
+            "blockchain": RendererOperator.BLOCKCHAIN,
+            "comparison": RendererOperator.COMPARISON,
+            "timeline": RendererOperator.TIMELINE,
+            "cycle": RendererOperator.CYCLE,
+            "cause_effect": RendererOperator.CAUSE_EFFECT,
+            "flowchart": RendererOperator.FLOWCHART,
+            "funnel": RendererOperator.FUNNEL,
+            "venn": RendererOperator.VENN,
+            "bar_chart": RendererOperator.BAR_CHART,
+            "line_chart": RendererOperator.LINE_CHART,
+            "equation": RendererOperator.EQUATION,
+            "code_trace": RendererOperator.CODE_TRACE,
+        }
+        return next(
+            (
+                operator
+                for prefix, operator in mappings.items()
+                if prefix in template_id
+            ),
+            RendererOperator.PROCESS,
         )
