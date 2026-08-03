@@ -10,6 +10,7 @@ from app.domain.lesson import (
     ConceptNode,
     ConceptRelation,
     LessonPlan,
+    normalize_relation_alias,
 )
 from app.domain.operations import OperationType, VisualOperation
 from app.domain.assets import ResolvedAssetSet
@@ -22,7 +23,10 @@ from app.planning import (
     SemanticAssetQueryPlanner,
     TemplateCompiler,
 )
-from app.planning.graph_semantics import normalize_lesson_structure
+from app.planning.graph_semantics import (
+    normalize_lesson_structure,
+    relation_label_is_compatible,
+)
 from app.layout import HierarchicalLayoutEngine
 from app.quality import EducationalQualityEvaluator, VisualQualityEvaluator
 from app.state import VisualStateTransitionEngine
@@ -197,6 +201,51 @@ def test_relation_compiler_nests_parts_and_only_connects_declared_flows() -> Non
     assert visual_report.decision is EvaluationDecision.PASS
 
 
+def test_containment_direction_is_repaired_from_contains_label_and_prerequisite() -> None:
+    """Parent-contains-child model output becomes child-part-of-parent."""
+
+    graph = ConceptGraph(
+        objectives=["Explain the car"],
+        nodes=[
+            ConceptNode(
+                concept_id="car",
+                label="Car",
+                definition="The complete vehicle.",
+                importance=1,
+                teaching_order=0,
+            ),
+            ConceptNode(
+                concept_id="engine",
+                label="Engine",
+                definition="The power unit.",
+                importance=1,
+                prerequisites=["car"],
+                teaching_order=1,
+            ),
+        ],
+        edges=[
+            ConceptEdge(
+                edge_id="car_contains_engine",
+                source_id="car",
+                target_id="engine",
+                relation=ConceptRelation.PART_OF,
+                label="contains",
+            )
+        ],
+        teaching_sequence=["car", "engine"],
+    )
+    normalized = normalize_lesson_structure(
+        LessonPlan(
+            title="Car",
+            summary="A car and its engine.",
+            concept_graph=graph,
+        )
+    )
+    edge = normalized.concept_graph.edges[0]
+    assert (edge.source_id, edge.target_id) == ("engine", "car")
+    assert edge.label == "part of"
+
+
 def test_quality_gate_rejects_flat_containment_and_highlight_only_shots() -> None:
     """A structurally valid but semantically false diagram cannot score a pass."""
 
@@ -294,6 +343,131 @@ def test_mechanism_validation_rejects_a_parts_only_graph() -> None:
         GeminiLessonPlanner._validate_semantics(request, parts_only)
 
 
+def test_dynamic_causal_synonym_is_normalized_from_flow_relation() -> None:
+    """Repair the common model mismatch of ``flows_to`` plus ``enables``."""
+
+    lesson = _mechanism_lesson().model_copy(deep=True)
+    lesson.concept_graph.edges.append(
+        ConceptEdge(
+            edge_id="enables_inference",
+            source_id="decision",
+            target_id="actuator",
+            relation=ConceptRelation.FLOWS_TO,
+            label="enables action",
+        )
+    )
+
+    normalized = normalize_lesson_structure(lesson)
+    edge = normalized.concept_graph.edges[-1]
+
+    assert edge.relation is ConceptRelation.CAUSES
+
+
+def test_dynamic_relation_follows_label_family_in_both_directions() -> None:
+    """Mismatched flow, transformation, and causal labels are repaired centrally."""
+
+    lesson = _mechanism_lesson()
+    edges = [
+        ConceptEdge(
+            edge_id="wrong_flow",
+            source_id="sensor",
+            target_id="decision",
+            relation=ConceptRelation.CAUSES,
+            label="measurement provides input",
+        ),
+        ConceptEdge(
+            edge_id="wrong_cause",
+            source_id="decision",
+            target_id="actuator",
+            relation=ConceptRelation.FLOWS_TO,
+            label="controller enables action",
+        ),
+        ConceptEdge(
+            edge_id="wrong_transform",
+            source_id="sensor",
+            target_id="actuator",
+            relation=ConceptRelation.FLOWS_TO,
+            label="state changes into an action",
+        ),
+    ]
+    normalized = normalize_lesson_structure(
+        lesson.model_copy(update={
+            "concept_graph": lesson.concept_graph.model_copy(update={"edges": edges})
+        })
+    )
+
+    assert [edge.relation for edge in normalized.concept_graph.edges] == [
+        ConceptRelation.FLOWS_TO,
+        ConceptRelation.CAUSES,
+        ConceptRelation.TRANSFORMS_TO,
+    ]
+
+
+def test_relation_aliases_normalize_before_pydantic_enum_validation() -> None:
+    """Natural-language model verbs map to stable relation enum values."""
+
+    graph = ConceptGraph.model_validate({
+        "objectives": ["Explain a laptop"],
+        "nodes": [
+            {
+                "concept_id": "source",
+                "label": "Operating System",
+                "definition": "Manages computer resources.",
+                "importance": 1,
+                "teaching_order": 0,
+            },
+            {
+                "concept_id": "target",
+                "label": "Processor",
+                "definition": "Executes instructions.",
+                "importance": 1,
+                "teaching_order": 1,
+            },
+        ],
+        "edges": [
+            {
+                "edge_id": "power",
+                "source_id": "source",
+                "target_id": "target",
+                "relation": "powers",
+                "label": "powers",
+            },
+            {
+                "edge_id": "control",
+                "source_id": "source",
+                "target_id": "target",
+                "relation": "controls",
+                "label": "manages",
+            },
+            {
+                "edge_id": "monitor",
+                "source_id": "source",
+                "target_id": "target",
+                "relation": "monitors",
+                "label": "monitors",
+            },
+        ],
+        "teaching_sequence": ["source", "target"],
+    })
+
+    assert [edge.relation for edge in graph.edges] == [
+        ConceptRelation.CAUSES,
+        ConceptRelation.CAUSES,
+        ConceptRelation.DEPENDS_ON,
+    ]
+    assert normalize_relation_alias("unknown_relation") == "unknown_relation"
+
+
+def test_common_model_action_labels_are_semantically_compatible() -> None:
+    """Plural action labels remain compatible with their dynamic relation."""
+
+    assert relation_label_is_compatible(ConceptRelation.FLOWS_TO, "supplies")
+    assert relation_label_is_compatible(ConceptRelation.FLOWS_TO, "displays")
+    assert relation_label_is_compatible(ConceptRelation.CAUSES, "uses")
+    assert relation_label_is_compatible(ConceptRelation.CAUSES, "executes")
+    assert relation_label_is_compatible(ConceptRelation.CAUSES, "influences planetary chemistry")
+
+
 def test_router_distinguishes_mechanism_from_static_anatomy() -> None:
     """General question intent wins over incidental architecture vocabulary."""
 
@@ -312,6 +486,32 @@ def test_router_distinguishes_mechanism_from_static_anatomy() -> None:
         }),
     })
     assert PedagogyRouter().route(anatomy, audience).mode.value == "spatial_anatomy"
+
+
+def test_router_does_not_force_mechanism_for_disconnected_dynamic_edges() -> None:
+    """A few isolated dynamic edges are not enough to claim a process lesson."""
+
+    base = _mechanism_lesson()
+    lesson = base.model_copy(update={
+        "title": "How controller components work",
+        "summary": "An overview of the components in a controller.",
+        "concept_graph": base.concept_graph.model_copy(update={
+            "edges": [
+                ConceptEdge(
+                    edge_id="isolated_cause",
+                    source_id="sensor",
+                    target_id="actuator",
+                    relation=ConceptRelation.CAUSES,
+                    label="triggers",
+                )
+            ]
+        })
+    })
+
+    assert PedagogyRouter().route(
+        lesson,
+        AudienceProfile(learning_goal="Understand laptops"),
+    ).mode.value == "concept_overview"
 
 
 def test_peer_collection_cannot_be_compiled_as_a_false_pipeline() -> None:

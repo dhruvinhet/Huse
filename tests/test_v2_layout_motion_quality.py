@@ -6,6 +6,8 @@ from app.camera import SemanticCameraPlanner
 from app.domain.assets import ResolvedAssetSet
 from app.domain.layout import Viewport
 from app.domain.narration import AlignedAudio, PhraseTiming
+from app.domain.storyboard import ShotPlan
+from app.domain.visual_document import ObjectLifecycle
 from app.layout import HierarchicalLayoutEngine
 from app.motion import SemanticAnimationPlanner
 from app.quality import DeterministicQualityEvaluator
@@ -124,3 +126,32 @@ def test_coverage_finding_names_missing_concept_ids() -> None:
         if item.code == "semantic_coverage_low"
     )
     assert "output" in finding.message
+
+
+def test_shot_plan_cleans_history_and_camera_uses_source_geometry() -> None:
+    """Focused shots hide history and emit an authoritative crop rectangle."""
+
+    original = storyboard()
+    board = original.model_copy(
+        update={
+            "beats": [
+                beat.model_copy(
+                    update={"shot_plan": ShotPlan.for_purpose(beat.purpose)}
+                )
+                for beat in original.beats
+            ]
+        }
+    )
+    document = VisualStateTransitionEngine().materialize(board)
+    second = document.states[1].object_states
+    assert second["input_box"].lifecycle is ObjectLifecycle.HIDDEN
+    assert second["output_box"].lifecycle is not ObjectLifecycle.HIDDEN
+
+    layout = HierarchicalLayoutEngine().layout(
+        document,
+        ResolvedAssetSet(),
+        Viewport(width=1280, height=720, margin=40),
+    )
+    camera = SemanticCameraPlanner().plan(board, layout, aligned_audio())
+    assert all("source_left" in cue.parameters for cue in camera.cues)
+    assert "output_box" in camera.cues[1].target_ids

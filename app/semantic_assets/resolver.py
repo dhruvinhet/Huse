@@ -3,6 +3,7 @@
 from hashlib import sha256
 import json
 from pathlib import Path
+from xml.etree import ElementTree
 
 from app.config.settings import PROJECT_ROOT, settings
 from app.domain.assets import (
@@ -92,6 +93,7 @@ class CatalogSemanticAssetResolver:
                 content_hash=self._file_hash(working_path),
                 editable=catalog_asset.editable,
                 ready=True,
+                **self._intrinsic_fields(working_path, catalog_asset.mime_type),
             )
 
         configured_path = (
@@ -118,7 +120,45 @@ class CatalogSemanticAssetResolver:
             content_hash=self._file_hash(working_path),
             editable=True,
             ready=True,
+            **self._intrinsic_fields(working_path, "image/svg+xml"),
         )
+
+    @staticmethod
+    def _intrinsic_fields(path: Path, mime_type: str) -> dict[str, float | None]:
+        """Read cached-friendly intrinsic dimensions without rasterizing assets."""
+
+        if mime_type != "image/svg+xml" or not path.is_file():
+            return {
+                "intrinsic_width": None,
+                "intrinsic_height": None,
+                "aspect_ratio": None,
+            }
+        try:
+            root = ElementTree.parse(path).getroot()
+            view_box = root.get("viewBox") or root.get("viewbox")
+            if view_box:
+                values = [float(item) for item in view_box.replace(",", " ").split()]
+                if len(values) == 4 and values[2] > 0 and values[3] > 0:
+                    return {
+                        "intrinsic_width": values[2],
+                        "intrinsic_height": values[3],
+                        "aspect_ratio": values[2] / values[3],
+                    }
+            width = float(str(root.get("width", "")).replace("px", ""))
+            height = float(str(root.get("height", "")).replace("px", ""))
+            if width > 0 and height > 0:
+                return {
+                    "intrinsic_width": width,
+                    "intrinsic_height": height,
+                    "aspect_ratio": width / height,
+                }
+        except (ElementTree.ParseError, TypeError, ValueError):
+            pass
+        return {
+            "intrinsic_width": None,
+            "intrinsic_height": None,
+            "aspect_ratio": None,
+        }
 
     def _storyboard_objects(self, storyboard: Storyboard) -> list[VisualObjectSpec]:
         """Collect initial and create-operation definitions."""

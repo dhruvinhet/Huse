@@ -76,6 +76,7 @@ class LaidOutNode(BaseModel):
 
     object_id: NonEmptyString
     kind: NonEmptyString
+    operator: str = ""
     box: LayoutBox
     z_index: int = 0
     children: list["LaidOutNode"] = Field(default_factory=list)

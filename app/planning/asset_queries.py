@@ -12,7 +12,7 @@ class SemanticAssetQueryPlanner:
     """Ensure visual concepts actually use the offline asset capability."""
 
     _ELIGIBLE_KINDS = frozenset({
-        "browser", "chip", "cloud", "component", "database", "document",
+        "browser", "chip", "cloud", "component", "document", "icon", "database",
         "graph_node", "phone", "server", "tree_node",
     })
 
@@ -46,6 +46,9 @@ class SemanticAssetQueryPlanner:
                 required_semantics=semantics,
             )
             item.content["asset_slot"] = "left"
+            item.content["focal_weight"] = (
+                0.9 if node.importance >= 0.75 else 0.6
+            )
 
         for root in result.initial_objects:
             enrich_object(root)

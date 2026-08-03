@@ -77,11 +77,24 @@ def _container(
                 parameters={"axis": layout, "gap": 32},
             )
         )
+    operator = {
+        "array": RendererOperator.ARRAY.value,
+        "graph": RendererOperator.GRAPH.value,
+        "tree": RendererOperator.TREE.value,
+        "matrix": RendererOperator.MATRIX.value,
+        "pipeline": RendererOperator.FLOW.value,
+        "probability_distribution": RendererOperator.BAR_CHART.value,
+    }.get(kind, kind)
     return VisualObjectSpec(
         object_id=object_id,
         kind=kind,
         semantic_role="educational_diagram",
-        content={"label": label, "layout": layout},
+        content={
+            "label": label,
+            "layout": layout,
+            "operator": operator,
+            "dsl_version": "1.0",
+        },
         style_token="concept.primary",
         children=children,
         constraints=constraints,
@@ -143,10 +156,12 @@ class PipelineTemplate:
                 "concepts": parameters["concepts"],
                 "relations": parameters.get("relations", []),
             })
-            return SemanticOperatorCompiler().compile(
-                RendererOperator.PROCESS,
-                validated,
+            operator = (
+                RendererOperator.FLOW
+                if parameters.get("dsl_version") == "1.0"
+                else RendererOperator.PROCESS
             )
+            return SemanticOperatorCompiler().compile(operator, validated)
         raw_details = parameters.get("stage_details")
         details = raw_details if isinstance(raw_details, list) else []
         children: list[VisualObjectSpec] = []

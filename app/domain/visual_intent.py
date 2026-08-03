@@ -10,8 +10,17 @@ from app.models.base import BaseModel, NonEmptyString
 
 
 class RendererOperator(str, Enum):
-    """High-level renderer programs available to visual planning."""
+    """High-level, bounded VisualDSL programs available to visual planning.
 
+    The names are intentionally semantic rather than pixel-oriented. Each
+    operator has a validated parameter contract and is expanded by the
+    deterministic operator compiler before layout or rendering.
+    """
+
+    ICON = "icon"
+    GROUP = "group"
+    FLOW = "flow"
+    CALLOUT = "callout"
     PROCESS = "process"
     COMPARISON = "comparison"
     TIMELINE = "timeline"
@@ -41,6 +50,14 @@ class RendererOperator(str, Enum):
     VENN = "venn"
     BAR_CHART = "bar_chart"
     LINE_CHART = "line_chart"
+    PLOT = "plot"
+    TABLE = "table"
+    MATRIX = "matrix"
+    MOLECULE = "molecule"
+    CIRCUIT = "circuit"
+    MAP = "map"
+    ANATOMY = "anatomy"
+    TRANSFORM = "transform"
     SEMANTIC_STRUCTURE = "semantic_structure"
 
 

@@ -66,11 +66,33 @@ class SVGRenderer:
 
         try:
             root = ElementTree.parse(svg_path).getroot()
-            view_width, view_height = self._view_size(root)
+            view_min_x, view_min_y, view_width, view_height = self._view_bounds(root)
+            target_width = max(1, int(obj.width))
+            target_height = max(1, int(obj.height))
+            cache_key = (str(svg_path.resolve()), svg_path.stat().st_mtime_ns, target_width, target_height)
+            cached_fallback = self._raster_cache.get(cache_key)
+            if cached_fallback is not None:
+                canvas.paste(
+                    cached_fallback,
+                    (round(obj.x - obj.width / 2), round(obj.y - obj.height / 2)),
+                    cached_fallback,
+                )
+                return True
+            fallback_canvas = Image.new("RGBA", (target_width, target_height), (0, 0, 0, 0))
+            fallback_obj = obj.model_copy(
+                update={
+                    "x": target_width / 2,
+                    "y": target_height / 2,
+                    "width": target_width,
+                    "height": target_height,
+                }
+            )
             rendered_elements = self._draw_elements(
-                canvas,
-                obj,
+                fallback_canvas,
+                fallback_obj,
                 root,
+                view_min_x,
+                view_min_y,
                 view_width,
                 view_height,
             )
@@ -84,6 +106,14 @@ class SVGRenderer:
                 obj.object_id,
             )
             return False
+        self._raster_cache[cache_key] = fallback_canvas
+        if len(self._raster_cache) > self._raster_cache_limit:
+            self._raster_cache.pop(next(iter(self._raster_cache)))
+        canvas.paste(
+            fallback_canvas,
+            (round(obj.x - obj.width / 2), round(obj.y - obj.height / 2)),
+            fallback_canvas,
+        )
         return True
 
     def _rasterized(self, path: Path, width: int, height: int) -> Image.Image:
@@ -114,6 +144,8 @@ class SVGRenderer:
         canvas: Image.Image,
         obj: RenderableObject,
         root: ElementTree.Element,
+        view_min_x: float,
+        view_min_y: float,
         view_width: float,
         view_height: float,
     ) -> int:
@@ -228,6 +260,17 @@ class SVGRenderer:
                     width=self._stroke_width(element, scale_x, scale_y),
                 )
                 rendered_elements += 1
+            elif tag == "path":
+                rendered_elements += self._draw_path(
+                    drawing,
+                    element,
+                    left,
+                    top,
+                    scale_x,
+                    scale_y,
+                    view_min_x,
+                    view_min_y,
+                )
             elif tag == "text" and (element.text or "").strip():
                 x, y = self._point(
                     element.get("x"),
@@ -261,6 +304,119 @@ class SVGRenderer:
 
         return rendered_elements
 
+    def _draw_path(
+        self,
+        drawing: ImageDraw.ImageDraw,
+        element: ElementTree.Element,
+        left: float,
+        top: float,
+        scale_x: float,
+        scale_y: float,
+        view_min_x: float,
+        view_min_y: float,
+    ) -> int:
+        """Render common icon paths without requiring a native SVG library.
+
+        The fallback understands the path commands used by the bundled icon
+        catalogs. Curves are represented by their endpoints, which preserves
+        the asset silhouette and keeps rendering deterministic when resvg is
+        unavailable. Native resvg remains the preferred high-fidelity path.
+        """
+
+        tokens = re.findall(
+            r"[AaCcHhLlMmQqSsTtVvZz]|[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?",
+            element.get("d", ""),
+        )
+        arity = {"M": 2, "L": 2, "H": 1, "V": 1, "C": 6, "S": 4, "Q": 4, "T": 2, "A": 7}
+        index = 0
+        command = ""
+        current = (0.0, 0.0)
+        start = current
+        subpaths: list[tuple[list[tuple[float, float]], bool]] = []
+        points: list[tuple[float, float]] = []
+        closed = False
+
+        def finish() -> None:
+            nonlocal points, closed
+            if points:
+                subpaths.append((points, closed))
+            points = []
+            closed = False
+
+        while index < len(tokens):
+            if tokens[index].isalpha():
+                command = tokens[index]
+                index += 1
+                if command in "Zz":
+                    current = start
+                    if points and points[-1] != start:
+                        points.append(start)
+                    closed = True
+                    finish()
+                    command = ""
+                    continue
+            if not command or command.upper() not in arity:
+                index += 1
+                continue
+            upper = command.upper()
+            count = arity[upper]
+            if index + count > len(tokens) or any(
+                token.isalpha() for token in tokens[index:index + count]
+            ):
+                command = ""
+                continue
+            values = [float(token) for token in tokens[index:index + count]]
+            index += count
+            relative = command.islower()
+            old = current
+            if upper in {"M", "L", "T"}:
+                target = (values[0], values[1])
+            elif upper == "H":
+                target = (values[0], old[1])
+            elif upper == "V":
+                target = (old[0], values[0])
+            elif upper in {"C", "S", "Q"}:
+                target = (values[-2], values[-1])
+            else:  # A/a: the final pair is the arc endpoint.
+                target = (values[5], values[6])
+            if relative:
+                target = (old[0] + target[0], old[1] + target[1])
+            current = target
+            if upper == "M":
+                if points:
+                    finish()
+                start = target
+                points = [target]
+                command = "l" if relative else "L"
+            else:
+                points.append(target)
+        finish()
+
+        rendered = 0
+        fill = self._paint(element.get("fill", "black"))
+        stroke = self._paint(element.get("stroke"))
+        stroke_width = self._stroke_width(element, scale_x, scale_y)
+        for path_points, is_closed in subpaths:
+            if len(path_points) < 2:
+                continue
+            scaled = [
+                (
+                    left + (x - view_min_x) * scale_x,
+                    top + (y - view_min_y) * scale_y,
+                )
+                for x, y in path_points
+            ]
+            if fill is not None and len(scaled) >= 3:
+                drawing.polygon(scaled, fill=fill)
+            if stroke is not None:
+                drawing.line(
+                    scaled + ([scaled[0]] if is_closed else []),
+                    fill=stroke,
+                    width=stroke_width,
+                )
+            rendered += 1
+        return rendered
+
     def _polygon_points(
         self,
         value: str,
@@ -293,19 +449,25 @@ class SVGRenderer:
             top + self._number(y) * scale_y,
         )
 
-    def _view_size(self, root: ElementTree.Element) -> tuple[float, float]:
+    def _view_bounds(self, root: ElementTree.Element) -> tuple[float, float, float, float]:
         """Read positive dimensions from viewBox or width and height."""
 
         view_box = root.get("viewBox")
         if view_box:
             values = [float(item) for item in view_box.replace(",", " ").split()]
             if len(values) == 4 and values[2] > 0 and values[3] > 0:
-                return values[2], values[3]
+                return values[0], values[1], values[2], values[3]
 
         width = self._number(root.get("width"))
         height = self._number(root.get("height"))
         if width <= 0 or height <= 0:
             raise ValueError("SVG dimensions must be positive")
+        return 0.0, 0.0, width, height
+
+    def _view_size(self, root: ElementTree.Element) -> tuple[float, float]:
+        """Return dimensions for callers that do not need the viewBox offset."""
+
+        _, _, width, height = self._view_bounds(root)
         return width, height
 
     @staticmethod

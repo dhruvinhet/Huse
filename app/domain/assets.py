@@ -37,7 +37,7 @@ class AssetQuery(BaseModel):
 
 
 class ResolvedSemanticAsset(BaseModel):
-    """Describe a ready asset with cache and license provenance."""
+    """Describe a ready asset with provenance and intrinsic geometry."""
 
     asset_id: NonEmptyString
     query_digest: NonEmptyString
@@ -48,6 +48,9 @@ class ResolvedSemanticAsset(BaseModel):
     content_hash: NonEmptyString
     editable: bool
     ready: bool
+    intrinsic_width: float | None = Field(default=None, gt=0)
+    intrinsic_height: float | None = Field(default=None, gt=0)
+    aspect_ratio: float | None = Field(default=None, gt=0)
 
 
 class ResolvedAssetSet(BaseModel):
@@ -64,3 +67,9 @@ class ResolvedAssetSet(BaseModel):
         if len(asset_ids) != len(set(asset_ids)):
             raise ValueError("resolved asset IDs must be unique")
         return self
+
+    def for_object(self, object_id: str) -> ResolvedSemanticAsset | None:
+        """Return the resolved asset associated with a visual object."""
+
+        asset_id = object_id if object_id.startswith("asset_") else f"asset_{object_id}"
+        return next((item for item in self.assets if item.asset_id == asset_id), None)

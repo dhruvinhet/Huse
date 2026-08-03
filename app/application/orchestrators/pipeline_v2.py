@@ -43,7 +43,7 @@ from app.domain.narration import NarrationPhrase, NarrationPlan
 from app.domain.pedagogy import PedagogyPlan
 from app.domain.quality import EvaluationDecision, QualityReport
 from app.domain.rendering import CompositionJob, RenderJob
-from app.domain.storyboard import Storyboard
+from app.domain.storyboard import ShotPlan, Storyboard
 from app.knowledge import InMemoryVisualKnowledgeBase
 from app.layout import HierarchicalLayoutEngine
 from app.motion import SemanticAnimationPlanner
@@ -308,6 +308,8 @@ class V2PipelineRunner:
                             pedagogy,
                         ),
                     )
+
+            storyboard = self._ensure_shot_plans(storyboard)
 
             if not resumed_storyboard:
                 storyboard = self._stage(
@@ -894,6 +896,26 @@ class V2PipelineRunner:
         if accepts_audience:
             return matcher(lesson.concept_graph, audience)
         return matcher(lesson.concept_graph)
+
+    @staticmethod
+    def _ensure_shot_plans(storyboard: Storyboard) -> Storyboard:
+        """Give provider- or checkpoint-loaded storyboards focused shot policies."""
+
+        if all(beat.shot_plan is not None for beat in storyboard.beats):
+            return storyboard
+        return storyboard.model_copy(
+            update={
+                "beats": [
+                    beat.model_copy(
+                        update={
+                            "shot_plan": beat.shot_plan
+                            or ShotPlan.for_purpose(beat.purpose),
+                        }
+                    )
+                    for beat in storyboard.beats
+                ]
+            }
+        )
 
     def _stage(
         self,

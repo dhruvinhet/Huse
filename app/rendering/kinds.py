@@ -55,7 +55,9 @@ class SemanticKindRegistry:
             "table", "matrix", "probability_distribution", "histogram",
             "pie_chart", "coordinate_axes", "nested_group", "component",
             "transformer_block", "attention_matrix", "embedding_vector",
-            "neural_network", "blockchain", "document",
+            "neural_network", "blockchain", "document", "flow", "molecule",
+            "circuit", "map", "anatomy", "transform", "icon", "layered",
+            "funnel", "venn",
         }
         text = {"text", "label", "annotation", "equation", "callout", "speech_bubble"}
         connectors = {"connector", "brace", "bracket", "underline", "highlight"}

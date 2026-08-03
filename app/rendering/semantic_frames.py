@@ -374,9 +374,14 @@ class SemanticFrameRenderer:
                 "handwriting", "write_left_to_right", "grow_edge",
                 "stroke_reveal", "reveal_cell", "reveal_cell_by_cell",
                 "timeline_trace", "cycle_trace", "cause_effect_flow",
-                "trace_steps", "decision_flow",
+                "trace_steps", "decision_flow", "sankey_flow",
+                "split_reveal", "funnel_collapse", "overlap_reveal",
+                "layer_stack", "plot_trace", "matrix_cell_sequence",
+                "bond_trace", "signal_trace", "route_trace",
+                "cutaway_reveal", "derivation_stack",
             } and progress < 1 and object_state.kind != "connector":
-                layer = self._horizontal_reveal(
+                layer = self._semantic_reveal(
+                    event.strategy,
                     layer.copy(),
                     cached.position,
                     reveal_box,
@@ -812,33 +817,53 @@ class SemanticFrameRenderer:
         cue: CameraCue,
         timestamp: float,
     ) -> Image.Image:
-        """Apply restrained, eased camera choreography after view fitting."""
+        """Apply a geometry-derived source rectangle with eased interpolation."""
 
         progress = self._cue_progress(cue, timestamp)
         progress = progress * progress * (3.0 - 2.0 * progress)
+        desired = (
+            float(cue.parameters.get("source_left", 0.0)),
+            float(cue.parameters.get("source_top", 0.0)),
+            float(cue.parameters.get("source_right", canvas.width)),
+            float(cue.parameters.get("source_bottom", canvas.height)),
+        )
+        if desired == (0.0, 0.0, float(canvas.width), float(canvas.height)):
+            desired = self._fallback_camera_rect(canvas, cue, progress)
+            left, top, right, bottom = desired
+        else:
+            full = (0.0, 0.0, float(canvas.width), float(canvas.height))
+            left = full[0] + (desired[0] - full[0]) * progress
+            top = full[1] + (desired[1] - full[1]) * progress
+            right = full[2] + (desired[2] - full[2]) * progress
+            bottom = full[3] + (desired[3] - full[3]) * progress
+            left, top, right, bottom = self._aspect_crop(
+                left, top, right, bottom, canvas.width, canvas.height
+            )
+        crop = canvas.crop((round(left), round(top), round(right), round(bottom)))
+        return crop.resize(canvas.size, Image.Resampling.LANCZOS)
+
+    @staticmethod
+    def _fallback_camera_rect(
+        canvas: Image.Image,
+        cue: CameraCue,
+        progress: float,
+    ) -> tuple[float, float, float, float]:
+        """Retain a bounded fallback for legacy camera cues without geometry."""
+
         zoom = {
-            CameraOperation.PAN: 0.015,
-            CameraOperation.TRACK: 0.025,
-            CameraOperation.FOCUS: 0.045,
-            CameraOperation.ZOOM: 0.060,
+            CameraOperation.PAN: 0.10,
+            CameraOperation.TRACK: 0.14,
+            CameraOperation.FOCUS: 0.22,
+            CameraOperation.ZOOM: 0.28,
         }.get(cue.operation, 0.0)
         inset_x = canvas.width * zoom * progress
         inset_y = canvas.height * zoom * progress
-        target_center_x = float(
-            cue.parameters.get("target_x", canvas.width / 2)
-        ) + float(cue.parameters.get("target_width", 0)) / 2
-        direction = -1.0 if target_center_x < canvas.width / 2 else 1.0
-        pan = (
-            canvas.width * 0.012 * progress * direction
-            if cue.operation in {CameraOperation.PAN, CameraOperation.TRACK}
-            else 0.0
+        return (
+            inset_x,
+            inset_y,
+            canvas.width - inset_x,
+            canvas.height - inset_y,
         )
-        left = max(0.0, min(canvas.width - 2 * inset_x, inset_x + pan))
-        top = inset_y
-        right = min(float(canvas.width), left + canvas.width - 2 * inset_x)
-        bottom = canvas.height - inset_y
-        crop = canvas.crop((round(left), round(top), round(right), round(bottom)))
-        return crop.resize(canvas.size, Image.Resampling.LANCZOS)
 
     def _trace_payload(
         self,
@@ -1465,6 +1490,140 @@ class SemanticFrameRenderer:
         draw.rectangle((left, top, left + box.width, bottom), fill=255)
         alpha = Image.composite(layer.getchannel("A"), Image.new("L", layer.size, 0), mask)
         layer.putalpha(alpha)
+        return layer
+
+    @classmethod
+    def _semantic_reveal(
+        cls,
+        strategy: str,
+        layer: Image.Image,
+        position: tuple[int, int],
+        box: LayoutBox,
+        progress: float,
+    ) -> Image.Image:
+        """Apply an operator-specific reveal adapter to a cached layer."""
+
+        if strategy in {"layer_stack", "funnel_collapse", "cutaway_reveal"}:
+            return cls._vertical_reveal(layer, position, box, progress)
+        if strategy in {"cycle_trace", "bond_trace", "overlap_reveal"}:
+            return cls._radial_reveal(layer, position, box, progress)
+        if strategy in {"matrix_cell_sequence", "reveal_cell_by_cell"}:
+            return cls._grid_reveal(layer, position, box, progress)
+        if strategy in {"trace_steps", "derivation_stack"}:
+            return cls._row_reveal(layer, position, box, progress)
+        if strategy in {"decision_flow", "morph_state"}:
+            return cls._diagonal_reveal(layer, position, box, progress)
+        return cls._horizontal_reveal(layer, position, box, progress)
+
+    @staticmethod
+    def _radial_reveal(
+        layer: Image.Image,
+        position: tuple[int, int],
+        box: LayoutBox,
+        progress: float,
+    ) -> Image.Image:
+        """Reveal from the center outward for cycles, bonds, and overlaps."""
+
+        mask = Image.new("L", layer.size, 0)
+        draw = ImageDraw.Draw(mask)
+        left = box.x - position[0]
+        top = box.y - position[1]
+        radius = max(box.width, box.height) * progress
+        center_x = left + box.width / 2
+        center_y = top + box.height / 2
+        draw.ellipse(
+            (
+                center_x - radius,
+                center_y - radius,
+                center_x + radius,
+                center_y + radius,
+            ),
+            fill=255,
+        )
+        layer.putalpha(
+            Image.composite(layer.getchannel("A"), Image.new("L", layer.size, 0), mask)
+        )
+        return layer
+
+    @staticmethod
+    def _grid_reveal(
+        layer: Image.Image,
+        position: tuple[int, int],
+        box: LayoutBox,
+        progress: float,
+    ) -> Image.Image:
+        """Reveal matrix/cell content in deterministic row-major order."""
+
+        mask = Image.new("L", layer.size, 0)
+        draw = ImageDraw.Draw(mask)
+        count = 4
+        visible = max(1, round(count * count * progress))
+        left = box.x - position[0]
+        top = box.y - position[1]
+        cell_width = box.width / count
+        cell_height = box.height / count
+        for index in range(visible):
+            row, column = divmod(index, count)
+            draw.rectangle(
+                (
+                    left + column * cell_width,
+                    top + row * cell_height,
+                    left + (column + 1) * cell_width,
+                    top + (row + 1) * cell_height,
+                ),
+                fill=255,
+            )
+        layer.putalpha(
+            Image.composite(layer.getchannel("A"), Image.new("L", layer.size, 0), mask)
+        )
+        return layer
+
+    @staticmethod
+    def _row_reveal(
+        layer: Image.Image,
+        position: tuple[int, int],
+        box: LayoutBox,
+        progress: float,
+    ) -> Image.Image:
+        """Reveal code/derivation rows one at a time."""
+
+        mask = Image.new("L", layer.size, 0)
+        draw = ImageDraw.Draw(mask)
+        rows = 6
+        visible = max(1, round(rows * progress))
+        left = box.x - position[0]
+        top = box.y - position[1]
+        row_height = box.height / rows
+        draw.rectangle(
+            (left, top, left + box.width, top + visible * row_height),
+            fill=255,
+        )
+        layer.putalpha(
+            Image.composite(layer.getchannel("A"), Image.new("L", layer.size, 0), mask)
+        )
+        return layer
+
+    @staticmethod
+    def _diagonal_reveal(
+        layer: Image.Image,
+        position: tuple[int, int],
+        box: LayoutBox,
+        progress: float,
+    ) -> Image.Image:
+        """Reveal decisions and state changes along a diagonal path."""
+
+        mask = Image.new("L", layer.size, 0)
+        draw = ImageDraw.Draw(mask)
+        left = box.x - position[0]
+        top = box.y - position[1]
+        boundary = left + (box.width + box.height) * progress
+        draw.polygon(
+            [(left, top), (boundary, top), (boundary - box.height, top + box.height), (left, top + box.height)],
+            fill=255,
+        )
+        layer.putalpha(
+            Image.composite(layer.getchannel("A"), Image.new("L", layer.size, 0), mask)
+        )
         return layer
 
     @staticmethod

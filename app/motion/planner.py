@@ -47,6 +47,29 @@ class SemanticAnimationPlanner:
         "code_trace": "trace_steps",
     }
 
+    _OPERATOR_STRATEGIES = {
+        "flow": "sankey_flow",
+        "process": "sankey_flow",
+        "cause_effect": "cause_effect_flow",
+        "timeline": "timeline_trace",
+        "cycle": "cycle_trace",
+        "comparison": "split_reveal",
+        "funnel": "funnel_collapse",
+        "venn": "overlap_reveal",
+        "layered": "layer_stack",
+        "plot": "plot_trace",
+        "bar_chart": "chart_growth",
+        "line_chart": "plot_trace",
+        "matrix": "matrix_cell_sequence",
+        "molecule": "bond_trace",
+        "circuit": "signal_trace",
+        "map": "route_trace",
+        "anatomy": "cutaway_reveal",
+        "transform": "morph_state",
+        "equation": "derivation_stack",
+        "code_trace": "trace_steps",
+    }
+
     _OPERATION_STRATEGIES = {
         OperationType.MOVE: "move",
         OperationType.RESIZE: "resize",
@@ -222,7 +245,7 @@ class SemanticAnimationPlanner:
         self,
         operation: VisualOperation,
         target_ids: list[str],
-        kind_index: dict[str, str],
+        kind_index: dict[str, tuple[str, str]],
     ) -> str:
         """Choose an operation-specific or semantic-kind strategy."""
 
@@ -231,11 +254,20 @@ class SemanticAnimationPlanner:
                 operation.operation,
                 "state_transition",
             )
-        first_kind = next(
-            (kind_index[target] for target in target_ids if target in kind_index),
-            "semantic_asset",
+        first_kind, first_operator = next(
+            (
+                kind_index[target]
+                for target in target_ids
+                if target in kind_index
+            ),
+            ("semantic_asset", ""),
         )
-        return self._KIND_STRATEGIES.get(first_kind, "stroke_reveal")
+        if first_kind == "connector":
+            return self._KIND_STRATEGIES.get(first_kind, "grow_edge")
+        return self._OPERATOR_STRATEGIES.get(
+            first_operator,
+            self._KIND_STRATEGIES.get(first_kind, "stroke_reveal"),
+        )
 
     @staticmethod
     def _beat_windows(alignment: AlignedAudio) -> dict[str, tuple[float, float]]:
@@ -252,15 +284,16 @@ class SemanticAnimationPlanner:
             for beat_id, intervals in grouped.items()
         }
 
-    def _kind_index(self, layout: LayoutPlan) -> dict[str, str]:
-        """Index object kinds across layout states."""
+    def _kind_index(self, layout: LayoutPlan) -> dict[str, tuple[str, str]]:
+        """Index object kinds and operators across layout states."""
 
-        index: dict[str, str] = {}
+        index: dict[str, tuple[str, str]] = {}
 
-        def visit(node: LaidOutNode) -> None:
-            index[node.object_id] = node.kind
+        def visit(node: LaidOutNode, inherited_operator: str = "") -> None:
+            operator = node.operator or inherited_operator
+            index[node.object_id] = (node.kind, operator)
             for child in node.children:
-                visit(child)
+                visit(child, operator)
 
         for root in layout.state_roots.values():
             visit(root)

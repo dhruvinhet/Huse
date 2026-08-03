@@ -45,7 +45,9 @@ class GeminiClient:
 
     _DEFAULT_PROVIDER = "gemini"
     _NVIDIA_PROVIDER_NAMES = {"nvidia", "nvidea"}
-    _NVIDIA_REQUEST_ATTEMPTS = 2
+    # Provider outages are transient; three bounded attempts cover a brief
+    # 503/504 window without making a failed run wait indefinitely.
+    _NVIDIA_REQUEST_ATTEMPTS = 3
     _NVIDIA_RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
 
     @property
@@ -245,7 +247,7 @@ class GeminiClient:
         """Record one bounded retry without logging secrets or response bodies."""
 
         logger.warning(
-            "NVIDIA request attempt {} failed with {}; retrying once.",
+            "NVIDIA request attempt {} failed with {}; retrying.",
             attempt,
             reason,
         )

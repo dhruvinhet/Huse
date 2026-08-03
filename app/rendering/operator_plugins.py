@@ -352,6 +352,31 @@ class SemanticOperatorPlugin(_Plugin):
             if operator == "line_chart":
                 points = [(left + 38 + index * max(20, (width - 70) // 3), bottom - 40 - round((0.25 + index * 0.2) * height)) for index in range(4)]
                 draw.line(points, fill=context.accent, width=4)
+        elif operator == "callout":
+            TextPlugin().draw(context)
+        elif operator == "group":
+            ContainerPlugin("layered").draw(context)
+        elif operator in {"plot", "table", "matrix"}:
+            ContainerPlugin("axes" if operator == "plot" else "table").draw(context)
+        elif operator == "flow":
+            self._draw_flow(context)
+        elif operator == "molecule":
+            self._draw_molecule(context)
+        elif operator == "circuit":
+            self._draw_circuit(context)
+        elif operator == "map":
+            self._draw_map(context)
+        elif operator == "anatomy":
+            self._draw_anatomy(context)
+        elif operator == "transform":
+            self._draw_transform(context)
+        elif operator == "icon":
+            draw.ellipse(
+                (left + width // 4, top + height // 5, right - width // 4, bottom - height // 5),
+                fill=context.fill,
+                outline=context.accent,
+                width=5,
+            )
         elif operator in {"equation", "proof_derivation"}:
             ContainerPlugin("document").draw(context)
             draw.text((left + 48, top + 52), "given  →  substitute  →  result", fill=context.accent)
@@ -382,18 +407,103 @@ class SemanticOperatorPlugin(_Plugin):
         if context.label:
             context.draw_text(draw, (left + 8, top + 2, right - 8, min(bottom, top + 42)), context.label, context.font_size, context.ink)
 
+    @staticmethod
+    def _draw_flow(context: OperatorDrawingContext) -> None:
+        """Draw a process lane with phase markers behind its child cards."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        cards = [
+            context.boxes[item]
+            for item in context.state.child_ids
+            if item in context.boxes and context.boxes[item].width > 40
+        ]
+        y = top + round((bottom - top) * 0.78)
+        if len(cards) >= 2:
+            centers = [round(box.x + box.width / 2) for box in cards]
+            draw.line((centers[0], y, centers[-1], y), fill=context.accent, width=6)
+            for index, center in enumerate(centers[:-1]):
+                next_center = centers[index + 1]
+                draw.polygon(
+                    [(next_center, y), (next_center - 18, y - 10), (next_center - 18, y + 10)],
+                    fill=context.accent,
+                )
+            for index, center in enumerate(centers, start=1):
+                draw.ellipse((center - 12, y - 12, center + 12, y + 12), fill=context.highlight, outline=context.accent, width=3)
+                draw.text((center - 5, y - 9), str(index), fill=context.ink)
+        draw.text((left + 16, bottom - 28), "ordered process", fill=context.accent)
+
+    @staticmethod
+    def _draw_molecule(context: OperatorDrawingContext) -> None:
+        """Draw a molecule backdrop and bond guide."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        draw.ellipse((left + 18, top + 48, right - 18, bottom - 18), outline=context.accent, width=3)
+        draw.text((left + 18, top + 50), "bonded structure", fill=context.accent)
+
+    @staticmethod
+    def _draw_circuit(context: OperatorDrawingContext) -> None:
+        """Draw circuit rails and terminals behind component nodes."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        y = top + round((bottom - top) * 0.72)
+        draw.line((left + 20, y, right - 20, y), fill=context.accent, width=5)
+        for x in (left + 28, right - 28):
+            draw.ellipse((x - 8, y - 8, x + 8, y + 8), fill=context.highlight, outline=context.ink, width=2)
+        draw.text((left + 18, bottom - 28), "signal path", fill=context.accent)
+
+    @staticmethod
+    def _draw_map(context: OperatorDrawingContext) -> None:
+        """Draw a map grid and orientation marker."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        for fraction in (0.25, 0.5, 0.75):
+            x = round(left + (right - left) * fraction)
+            y = round(top + (bottom - top) * fraction)
+            draw.line((x, top + 44, x, bottom - 12), fill=context.accent, width=2)
+            draw.line((left + 12, y, right - 12, y), fill=context.accent, width=2)
+        draw.polygon([(right - 28, top + 58), (right - 42, top + 88), (right - 14, top + 88)], fill=context.accent)
+
+    @staticmethod
+    def _draw_anatomy(context: OperatorDrawingContext) -> None:
+        """Draw nested cutaway layers rather than a plain card outline."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        height = bottom - top
+        for index in range(3):
+            inset = 18 + index * 18
+            y = top + 52 + index * max(24, (height - 76) // 3)
+            draw.rounded_rectangle((left + inset, y, right - inset, y + 26), radius=10, outline=context.accent, width=3)
+        draw.text((left + 18, bottom - 28), "layers and parts", fill=context.accent)
+
+    @staticmethod
+    def _draw_transform(context: OperatorDrawingContext) -> None:
+        """Draw an input-to-output transformation arrow."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        y = top + round((bottom - top) * 0.70)
+        draw.line((left + 30, y, right - 44, y), fill=context.accent, width=6)
+        draw.polygon([(right - 30, y), (right - 52, y - 14), (right - 52, y + 14)], fill=context.accent)
+        draw.text((left + 18, bottom - 28), "state change", fill=context.accent)
+
 
 class OperatorRendererRegistry:
     """Resolve every declared operator/kind explicitly and fail closed."""
 
     def __init__(self) -> None:
         operator_names = {
-            "process", "comparison", "timeline", "array", "tree", "graph",
+            "icon", "group", "flow", "callout", "process", "comparison", "timeline", "array", "tree", "graph",
             "equation", "code_trace", "simulation", "spatial", "binary_search",
             "sorting", "graph_traversal", "neural_network", "protocol", "system",
             "tree_index", "scheduling", "memory_map", "hash_map", "blockchain",
             "cycle", "cause_effect", "layered", "flowchart", "funnel", "venn",
-            "bar_chart", "line_chart",
+            "bar_chart", "line_chart", "plot", "table", "matrix", "molecule", "circuit",
+            "map", "anatomy", "transform",
             "semantic_structure",
         }
         self._operators = {
@@ -401,10 +511,13 @@ class OperatorRendererRegistry:
             for name in operator_names
         }
         self._kinds: dict[str, _Plugin] = {}
+        for operator in {"flow", "molecule", "circuit", "map", "anatomy", "transform"}:
+            self._register_kind(SemanticOperatorPlugin(operator), {operator})
         self._register_kind(TextPlugin(), {"text", "label", "annotation", "equation", "callout", "speech_bubble"})
         self._register_kind(HistogramBarPlugin(), {"histogram_bar"})
         self._register_kind(DecorationPlugin(), {"brace", "bracket", "underline", "highlight"})
         motif_kinds = {
+            "icon": {"icon"},
             "component": {"component"},
             "array_cell": {"array_cell"},
             "matrix_cell": {"matrix_cell"},
@@ -438,6 +551,9 @@ class OperatorRendererRegistry:
             "histogram": {"probability_distribution", "histogram"},
             "axes": {"pie_chart", "coordinate_axes"},
             "layered": {"nested_group"},
+            "layered_family": {"layered"},
+            "funnel": {"funnel"},
+            "venn": {"venn"},
             "pipeline": {"pipeline", "transformer_block"},
             "network": {"neural_network"},
             "blockchain": {"blockchain"},
@@ -452,6 +568,11 @@ class OperatorRendererRegistry:
 
         operator = str(context.state.content.get("operator", "")).strip()
         plugin = self._operators.get(operator) if operator else None
+        if plugin is None and operator == "semantic_structure":
+            source_operator = str(
+                context.state.content.get("source_operator", "")
+            ).strip()
+            plugin = self._operators.get(source_operator)
         if plugin is None:
             plugin = self._kinds.get(context.state.kind)
         if plugin is None:

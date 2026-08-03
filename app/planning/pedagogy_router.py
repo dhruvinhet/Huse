@@ -184,11 +184,20 @@ class PedagogyRouter:
         structure = analyze_graph(lesson.concept_graph)
         dynamic_relations = set(CAUSAL_RELATIONS)
         relation_set = {edge.relation for edge in lesson.concept_graph.edges}
-        mechanism_score = 2 * len(relation_set & dynamic_relations)
-        if "how" in terms and terms & {
+        mechanism_score = (
+            2 * len(relation_set & dynamic_relations)
+            if structure.is_process
+            else 0
+        )
+        has_dynamic_graph = bool(relation_set & dynamic_relations)
+        if (
+            (structure.is_process or not has_dynamic_graph)
+            and "how" in terms
+            and terms & {
             "work", "works", "working", "mechanism", "flow", "flows",
             "change", "changes", "transform", "transforms",
-        }:
+            }
+        ):
             mechanism_score += 3
         if mechanism_score:
             scores[PedagogyMode.MECHANISM_FIRST] = mechanism_score
@@ -239,7 +248,13 @@ class PedagogyRouter:
         lesson: LessonPlan,
         audience: AudienceProfile,
     ) -> str:
-        """Return normalized request and lesson language with phrase order intact."""
+        """Return explicit intent language, excluding noisy node metadata.
+
+        Node definitions and visual-affordance names describe the content after
+        routing has been chosen. Using them as routing keywords lets incidental
+        words such as ``component`` or ``pipeline`` override the user's actual
+        request, especially when a model produces a mixed or incomplete graph.
+        """
 
         return " ".join(
             [
@@ -247,11 +262,6 @@ class PedagogyRouter:
                 lesson.summary,
                 audience.learning_goal,
                 *lesson.concept_graph.objectives,
-                *[
-                    f"{node.label} {node.definition} "
-                    + " ".join(node.visual_affordances)
-                    for node in lesson.concept_graph.nodes
-                ],
             ]
         ).lower()
 

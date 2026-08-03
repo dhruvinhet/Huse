@@ -8,6 +8,7 @@ from app.domain.pedagogy import PedagogyPlan, PedagogyShot
 from app.domain.storyboard import (
     AttentionCue,
     CameraIntent,
+    ShotPlan,
     Storyboard,
     VisualBeat,
     VisualObjectSpec,
@@ -18,6 +19,11 @@ from app.templates.operator_templates import (
     PARAMETER_MODELS,
     SemanticOperatorCompiler,
 )
+
+
+MAX_ROOT_OPERANDS = 10
+MAX_ROOT_CONCEPTS = 12
+MAX_ROOT_RELATIONS = 24
 
 
 class VisualIntentCompiler:
@@ -110,12 +116,24 @@ class VisualIntentCompiler:
         by_id = {
             node.concept_id: node for node in lesson.concept_graph.nodes
         }
+        overview_ids = set(lesson.concept_graph.teaching_sequence[:MAX_ROOT_CONCEPTS])
+        overview_nodes = [
+            node
+            for node in lesson.concept_graph.nodes
+            if node.concept_id in overview_ids
+        ]
+        overview_relations = [
+            edge
+            for edge in lesson.concept_graph.edges
+            if edge.source_id in overview_ids and edge.target_id in overview_ids
+        ][:MAX_ROOT_RELATIONS]
         parameters = {
             "object_id": ids["root"],
             "label": lesson.title,
             "operands": [
                 by_id[item].label
-                for item in lesson.concept_graph.teaching_sequence
+                for item in lesson.concept_graph.teaching_sequence[:MAX_ROOT_OPERANDS]
+                if item in by_id
             ],
             "concepts": [
                 {
@@ -126,7 +144,7 @@ class VisualIntentCompiler:
                     "order": node.teaching_order,
                     "visual_affordances": node.visual_affordances,
                 }
-                for node in lesson.concept_graph.nodes
+                for node in overview_nodes
             ],
             "relations": [
                 {
@@ -135,7 +153,7 @@ class VisualIntentCompiler:
                     "relation": edge.relation.value,
                     "label": edge.label,
                 }
-                for edge in lesson.concept_graph.edges
+                for edge in overview_relations
             ],
         }
         model = PARAMETER_MODELS.get(
@@ -284,6 +302,7 @@ class VisualIntentCompiler:
                 operation=(route.camera_operation if route else "hold"),
                 target_ids=[ids["root"]],
             ),
+            shot_plan=ShotPlan.for_purpose(purpose),
         )
 
     @staticmethod

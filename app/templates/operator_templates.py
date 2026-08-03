@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import re
+from typing import Literal
 from pydantic import Field
 
 from app.domain.layout import ConstraintStrength, ConstraintType, LayoutConstraint
@@ -147,7 +148,63 @@ class GenericOperatorParameters(OperatorParameters):
     active_index: int = Field(default=0, ge=0)
 
 
+class IconParameters(OperatorParameters):
+    """Bounded single-concept icon composition parameters."""
+
+    icon_name: NonEmptyString = "semantic"
+    size_class: Literal["small", "medium", "large"] = "medium"
+
+
+class FlowParameters(OperatorParameters):
+    """Bounded ordered stages and typed transitions."""
+
+    stages: list[NonEmptyString] = Field(default_factory=list, max_length=10)
+
+
+class MoleculeParameters(OperatorParameters):
+    """Atoms and bonds for a deterministic molecule diagram."""
+
+    atoms: list[NonEmptyString] = Field(default_factory=list, max_length=10)
+    bonds: list[tuple[int, int]] = Field(default_factory=list, max_length=16)
+
+
+class CircuitParameters(OperatorParameters):
+    """Components and signal connections for a circuit diagram."""
+
+    components: list[NonEmptyString] = Field(default_factory=list, max_length=10)
+    connections: list[tuple[int, int]] = Field(default_factory=list, max_length=16)
+
+
+class MapParameters(OperatorParameters):
+    """Regions and markers for a bounded map-like composition."""
+
+    regions: list[NonEmptyString] = Field(default_factory=list, max_length=10)
+    markers: list[NonEmptyString] = Field(default_factory=list, max_length=10)
+
+
+class AnatomyParameters(OperatorParameters):
+    """Parts and layers for a bounded anatomy cutaway."""
+
+    parts: list[NonEmptyString] = Field(default_factory=list, max_length=10)
+    layers: list[NonEmptyString] = Field(default_factory=list, max_length=6)
+
+
+class TransformParameters(OperatorParameters):
+    """Input, state-change, and output operands for transformations."""
+
+    input_state: NonEmptyString = "Input"
+    output_state: NonEmptyString = "Output"
+    state_changes: list[NonEmptyString] = Field(default_factory=list, max_length=8)
+
+
 PARAMETER_MODELS: dict[RendererOperator, type[OperatorParameters]] = {
+    RendererOperator.ICON: IconParameters,
+    RendererOperator.FLOW: FlowParameters,
+    RendererOperator.MOLECULE: MoleculeParameters,
+    RendererOperator.CIRCUIT: CircuitParameters,
+    RendererOperator.MAP: MapParameters,
+    RendererOperator.ANATOMY: AnatomyParameters,
+    RendererOperator.TRANSFORM: TransformParameters,
     RendererOperator.BINARY_SEARCH: BinarySearchParameters,
     RendererOperator.SORTING: SortingParameters,
     RendererOperator.GRAPH_TRAVERSAL: GraphTraversalParameters,
@@ -220,7 +277,16 @@ class OperatorTemplate:
         validated = self.parameter_model.model_validate(
             {key: value for key, value in normalized.items() if key in allowed}
         )
-        return SemanticOperatorCompiler().compile(self.operator, validated)
+        # Directed educational templates use the bounded FLOW grammar in
+        # production. Their retrieval names remain stable, while compilation
+        # no longer falls back to an arbitrary nested card tree. Flowchart,
+        # layered, funnel, and Venn keep their own operators so their pixel
+        # silhouettes remain visibly different.
+        dsl_operator = {
+            RendererOperator.CAUSE_EFFECT: RendererOperator.FLOW,
+            RendererOperator.PROCESS: RendererOperator.FLOW,
+        }.get(self.operator, self.operator)
+        return SemanticOperatorCompiler().compile(dsl_operator, validated)
 
 
 class SemanticOperatorCompiler:
@@ -233,18 +299,244 @@ class SemanticOperatorCompiler:
     ) -> VisualObjectSpec:
         """Dispatch to a procedural operator implementation."""
 
-        if parameters.concepts and self._uses_semantic_structure(operator):
+        # Keep the relation-aware whole/part hierarchy for system diagrams
+        # whose lesson graph explicitly declares containment. It is still a
+        # bounded compiler output, and the renderer below dispatches its
+        # declared source operator instead of treating it as a free-form tree.
+        if operator is RendererOperator.SYSTEM and parameters.concepts:
             return self._compile_semantic_structure(operator, parameters)
         method = getattr(self, f"_compile_{operator.value}", None)
         if callable(method):
             return method(parameters)
         return self._compile_educational(operator, parameters)
 
+    def _compile_icon(self, parameters: OperatorParameters) -> VisualObjectSpec:
+        """Compile a single asset-backed concept without a generic box tree."""
+
+        label = parameters.label
+        if parameters.concepts:
+            concept = sorted(parameters.concepts, key=lambda item: item.order)[0]
+            label = concept.label
+        return VisualObjectSpec(
+            object_id=parameters.object_id,
+            kind="icon",
+            semantic_role="dsl_icon",
+            concept_ids=[item.concept_id for item in parameters.concepts[:1]],
+            content={
+                "label": label,
+                "operator": RendererOperator.ICON.value,
+                "icon_name": getattr(parameters, "icon_name", "semantic"),
+                "size_class": getattr(parameters, "size_class", "medium"),
+                "dsl_version": "1.0",
+            },
+            accessibility_label=f"{label} icon",
+        )
+
+    def _compile_group(self, parameters: OperatorParameters) -> VisualObjectSpec:
+        """Compile a bounded semantic group with explicit members."""
+
+        return self._compile_dsl_structure(RendererOperator.GROUP, parameters)
+
+    def _compile_callout(self, parameters: OperatorParameters) -> VisualObjectSpec:
+        """Compile one bounded evidence callout."""
+
+        text = parameters.operands[0] if parameters.operands else parameters.label
+        return VisualObjectSpec(
+            object_id=parameters.object_id,
+            kind="callout",
+            semantic_role="dsl_callout",
+            concept_ids=[item.concept_id for item in parameters.concepts],
+            content={
+                "text": text,
+                "operator": RendererOperator.CALLOUT.value,
+                "dsl_version": "1.0",
+            },
+            accessibility_label=text,
+        )
+
+    def _compile_flow(self, parameters: OperatorParameters) -> VisualObjectSpec:
+        """Compile a stage flow with explicit directional connectors."""
+
+        return self._compile_dsl_structure(RendererOperator.FLOW, parameters)
+
+    def _compile_molecule(self, parameters: OperatorParameters) -> VisualObjectSpec:
+        """Compile atoms and bonds as a graph-shaped molecule."""
+
+        return self._compile_dsl_structure(RendererOperator.MOLECULE, parameters)
+
+    def _compile_circuit(self, parameters: OperatorParameters) -> VisualObjectSpec:
+        """Compile circuit components and signal connections."""
+
+        return self._compile_dsl_structure(RendererOperator.CIRCUIT, parameters)
+
+    def _compile_map(self, parameters: OperatorParameters) -> VisualObjectSpec:
+        """Compile a bounded map with named regions and markers."""
+
+        return self._compile_dsl_structure(RendererOperator.MAP, parameters)
+
+    def _compile_anatomy(self, parameters: OperatorParameters) -> VisualObjectSpec:
+        """Compile anatomy parts into a layered cutaway structure."""
+
+        return self._compile_dsl_structure(RendererOperator.ANATOMY, parameters)
+
+    def _compile_transform(self, parameters: OperatorParameters) -> VisualObjectSpec:
+        """Compile input, state changes, and output as a transform strip."""
+
+        return self._compile_dsl_structure(RendererOperator.TRANSFORM, parameters)
+
+    def _compile_plot(self, parameters: OperatorParameters) -> VisualObjectSpec:
+        """Compile a bounded plot using the existing chart renderer."""
+
+        return self._compile_educational(RendererOperator.LINE_CHART, parameters)
+
+    def _compile_table(self, parameters: OperatorParameters) -> VisualObjectSpec:
+        """Compile a bounded comparison table."""
+
+        return self._compile_educational(RendererOperator.COMPARISON, parameters)
+
+    def _compile_matrix(self, parameters: OperatorParameters) -> VisualObjectSpec:
+        """Compile bounded matrix cells with explicit row-like placement."""
+
+        return self._compile_dsl_structure(RendererOperator.MATRIX, parameters)
+
+    def _compile_dsl_structure(
+        self,
+        operator: RendererOperator,
+        parameters: OperatorParameters,
+    ) -> VisualObjectSpec:
+        """Compile the shared bounded graph grammar used by VisualDSL operators."""
+
+        concepts = sorted(parameters.concepts, key=lambda item: item.order)
+        if not concepts:
+            labels = list(parameters.operands[:10]) or [parameters.label]
+            concepts = [
+                SemanticConceptParameter(
+                    concept_id=f"operand_{index}",
+                    label=label,
+                    definition=label,
+                    importance=0.5,
+                    order=index,
+                )
+                for index, label in enumerate(labels)
+            ]
+        leaf_kind = {
+            RendererOperator.MOLECULE: "graph_node",
+            RendererOperator.MAP: "graph_node",
+            RendererOperator.MATRIX: "matrix_cell",
+        }.get(operator, "component")
+        children = [
+            self._leaf(
+                parameters.object_id,
+                leaf_kind,
+                index,
+                concept.label,
+                f"{operator.value}_part",
+                {
+                    "detail": concept.definition,
+                    "importance": concept.importance,
+                },
+            )
+            for index, concept in enumerate(concepts[:12])
+        ]
+        pairs = [
+            (
+                edge.source_id,
+                edge.target_id,
+                edge.relation.value,
+                edge.label or edge.relation.value,
+            )
+            for edge in parameters.relations
+            if edge.source_id in {item.concept_id for item in concepts}
+            and edge.target_id in {item.concept_id for item in concepts}
+        ]
+        if not pairs and operator in {
+            RendererOperator.FLOW,
+            RendererOperator.TRANSFORM,
+            RendererOperator.CIRCUIT,
+        }:
+            pairs = [
+                (
+                    concepts[index].concept_id,
+                    concepts[index + 1].concept_id,
+                    operator.value,
+                    "",
+                )
+                for index in range(len(concepts) - 1)
+            ]
+        object_by_concept = {
+            concept.concept_id: f"{parameters.object_id}_item_{index:03d}"
+            for index, concept in enumerate(concepts[:12])
+        }
+        for index, (source, target, relation_kind, label) in enumerate(pairs[:16]):
+            if source not in object_by_concept or target not in object_by_concept:
+                continue
+            children.append(
+                VisualObjectSpec(
+                    object_id=f"{parameters.object_id}_connector_{index:03d}",
+                    kind="connector",
+                    semantic_role=f"{operator.value}_relation",
+                    concept_ids=[source, target],
+                    content={
+                        "source_id": object_by_concept[source],
+                        "target_id": object_by_concept[target],
+                        "label": label,
+                        "relation": relation_kind,
+                    },
+                    accessibility_label=f"{source} {label} {target}".strip(),
+                )
+            )
+        root_kind = {
+            RendererOperator.GROUP: "nested_group",
+            RendererOperator.FLOW: "flow",
+            RendererOperator.MOLECULE: "molecule",
+            RendererOperator.CIRCUIT: "circuit",
+            RendererOperator.MAP: "map",
+            RendererOperator.ANATOMY: "anatomy",
+            RendererOperator.TRANSFORM: "transform",
+            RendererOperator.MATRIX: "matrix",
+        }.get(operator, "nested_group")
+        # Keep long flows readable: a bounded wrapped grid avoids shrinking
+        # seven or more labelled stages below the minimum text geometry.
+        layout = (
+            "grid"
+            if operator in {
+                RendererOperator.MOLECULE,
+                RendererOperator.ANATOMY,
+                RendererOperator.MATRIX,
+            }
+            or (operator is RendererOperator.FLOW and len(concepts) > 4)
+            else "horizontal"
+        )
+        return self._container(
+            parameters,
+            root_kind,
+            children,
+            layout,
+            {"operator": operator.value, "dsl_version": "1.0"},
+        )
+
     @staticmethod
     def _uses_semantic_structure(operator: RendererOperator) -> bool:
         """Use the lesson graph for compositional operators, not a label chain."""
 
         stateful = {
+            RendererOperator.ICON,
+            RendererOperator.GROUP,
+            RendererOperator.FLOW,
+            RendererOperator.CALLOUT,
+            RendererOperator.COMPARISON,
+            RendererOperator.TIMELINE,
+            RendererOperator.ARRAY,
+            RendererOperator.TREE,
+            RendererOperator.GRAPH,
+            RendererOperator.PLOT,
+            RendererOperator.TABLE,
+            RendererOperator.MATRIX,
+            RendererOperator.MOLECULE,
+            RendererOperator.CIRCUIT,
+            RendererOperator.MAP,
+            RendererOperator.ANATOMY,
+            RendererOperator.TRANSFORM,
             RendererOperator.BINARY_SEARCH,
             RendererOperator.SORTING,
             RendererOperator.GRAPH_TRAVERSAL,
@@ -254,11 +546,19 @@ class SemanticOperatorCompiler:
             RendererOperator.MEMORY_MAP,
             RendererOperator.HASH_MAP,
             RendererOperator.BLOCKCHAIN,
+            RendererOperator.CYCLE,
+            RendererOperator.CAUSE_EFFECT,
+            RendererOperator.LAYERED,
+            RendererOperator.FLOWCHART,
+            RendererOperator.FUNNEL,
+            RendererOperator.VENN,
             RendererOperator.EQUATION,
             RendererOperator.CODE_TRACE,
             RendererOperator.SIMULATION,
             RendererOperator.BAR_CHART,
             RendererOperator.LINE_CHART,
+            RendererOperator.NEURAL_NETWORK,
+            RendererOperator.SPATIAL,
         }
         return operator not in stateful
 
@@ -390,6 +690,7 @@ class SemanticOperatorCompiler:
                 "source_operator": operator.value,
                 "relation_kinds": relation_kinds,
                 "connector_mode": "explicit" if connectors else "none",
+                "dsl_version": "1.0",
             },
             children=children,
             constraints=self._constraints(
@@ -580,23 +881,114 @@ class SemanticOperatorCompiler:
 
     def _compile_educational(self, operator: RendererOperator, raw: OperatorParameters) -> VisualObjectSpec:
         parameters = GenericOperatorParameters.model_validate(raw.model_dump())
-        labels = parameters.operands or ["Input", "Relation", "Result"]
+        concepts = sorted(parameters.concepts, key=lambda item: item.order)
+        labels = (
+            [item.label for item in concepts[:12]]
+            or parameters.operands
+            or ["Input", "Relation", "Result"]
+        )
         kind_map = {
             RendererOperator.COMPARISON: "table", RendererOperator.TIMELINE: "timeline",
             RendererOperator.CYCLE: "graph", RendererOperator.CAUSE_EFFECT: "pipeline",
-            RendererOperator.PROCESS: "pipeline", RendererOperator.LAYERED: "nested_group",
+            RendererOperator.PROCESS: "pipeline", RendererOperator.LAYERED: "layered",
             RendererOperator.FLOWCHART: "flowchart", RendererOperator.FUNNEL: "nested_group",
-            RendererOperator.VENN: "nested_group", RendererOperator.BAR_CHART: "histogram",
+            RendererOperator.VENN: "venn", RendererOperator.BAR_CHART: "histogram",
             RendererOperator.LINE_CHART: "coordinate_axes", RendererOperator.EQUATION: "nested_group",
             RendererOperator.CODE_TRACE: "document",
         }
+        kind_map[RendererOperator.FUNNEL] = "funnel"
         root_kind = kind_map.get(operator, "nested_group")
         leaf_kind = "histogram_bar" if operator is RendererOperator.BAR_CHART else "equation" if operator is RendererOperator.EQUATION else "text" if operator is RendererOperator.CODE_TRACE else "component"
-        children = [self._leaf(parameters.object_id, leaf_kind, index, label, f"{operator.value}_operand", {"value": parameters.values[index] if index < len(parameters.values) else (index + 1) / len(labels)}) for index, label in enumerate(labels)]
-        if operator in {RendererOperator.PROCESS, RendererOperator.CAUSE_EFFECT, RendererOperator.TIMELINE, RendererOperator.FLOWCHART, RendererOperator.CYCLE}:
-            children.extend(self._connectors(parameters.object_id, len(labels), close_cycle=operator is RendererOperator.CYCLE))
-        layout = "vertical" if operator in {RendererOperator.LAYERED, RendererOperator.FUNNEL, RendererOperator.EQUATION, RendererOperator.CODE_TRACE} else "graph" if operator in {RendererOperator.CYCLE, RendererOperator.FLOWCHART, RendererOperator.VENN, RendererOperator.LINE_CHART} else "horizontal"
-        return self._container(parameters, root_kind, children, layout, {"operator": operator.value, "active_index": parameters.active_index})
+        children = [
+            self._leaf(
+                parameters.object_id,
+                leaf_kind,
+                index,
+                label,
+                f"{operator.value}_operand",
+                {
+                    "value": parameters.values[index]
+                    if index < len(parameters.values)
+                    else (index + 1) / len(labels),
+                    "detail": (
+                        concepts[index].definition
+                        if index < len(concepts)
+                        else ""
+                    ),
+                    **(
+                        {"concept_id": concepts[index].concept_id}
+                        if index < len(concepts)
+                        else {}
+                    ),
+                },
+            )
+            for index, label in enumerate(labels)
+        ]
+        item_ids: list[str] | None = None
+        if concepts:
+            item_ids = [
+                f"{parameters.object_id}_concept_{self._safe_id(item.concept_id)}"
+                for item in concepts[: len(children)]
+            ]
+            for child, concept, item_id in zip(children, concepts, item_ids):
+                child.object_id = item_id
+                child.concept_ids = [concept.concept_id]
+        if operator in {
+            RendererOperator.PROCESS,
+            RendererOperator.CAUSE_EFFECT,
+            RendererOperator.TIMELINE,
+            RendererOperator.FLOWCHART,
+            RendererOperator.CYCLE,
+        }:
+            if concepts and item_ids and parameters.relations:
+                children.extend(
+                    self._relation_connectors(
+                        parameters.object_id,
+                        concepts,
+                        item_ids,
+                        parameters.relations,
+                        operator,
+                    )
+                )
+            else:
+                children.extend(
+                    self._connectors(
+                        parameters.object_id,
+                        len(labels),
+                        close_cycle=operator is RendererOperator.CYCLE,
+                        item_ids=item_ids,
+                    )
+                )
+        layout = (
+            "vertical"
+            if operator
+            in {
+                RendererOperator.LAYERED,
+                RendererOperator.FUNNEL,
+                RendererOperator.EQUATION,
+                RendererOperator.CODE_TRACE,
+            }
+            else "graph"
+            if operator
+            in {
+                RendererOperator.CYCLE,
+                RendererOperator.FLOWCHART,
+                RendererOperator.VENN,
+                RendererOperator.LINE_CHART,
+            }
+            else "horizontal"
+        )
+        return self._container(
+            parameters,
+            root_kind,
+            children,
+            layout,
+            {
+                "operator": operator.value,
+                "active_index": parameters.active_index,
+                "dsl_version": "1.0",
+            },
+        )
 
     def _graph_container(self, parameters: OperatorParameters, kind: str, labels: list[str], edges: list[tuple[int, int]], content: dict[str, object]) -> VisualObjectSpec:
         children = [self._leaf(parameters.object_id, "graph_node", index, label, "graph_vertex") for index, label in enumerate(labels)]
@@ -610,9 +1002,80 @@ class SemanticOperatorCompiler:
     def _leaf(object_id: str, kind: str, index: int, label: str, role: str, extra: dict[str, object] | None = None) -> VisualObjectSpec:
         return VisualObjectSpec(object_id=f"{object_id}_item_{index:03d}", kind=kind, semantic_role=role, content={"label": label, "order": index, **(extra or {})}, accessibility_label=label)
 
-    def _connectors(self, object_id: str, count: int, role: str = "flow", close_cycle: bool = False) -> list[VisualObjectSpec]:
+    def _connectors(
+        self,
+        object_id: str,
+        count: int,
+        role: str = "flow",
+        close_cycle: bool = False,
+        item_ids: list[str] | None = None,
+    ) -> list[VisualObjectSpec]:
         limit = count if close_cycle and count > 2 else max(0, count - 1)
-        return [self._connector(object_id, index, index, (index + 1) % count, role) for index in range(limit)]
+        return [
+            VisualObjectSpec(
+                object_id=f"{object_id}_connector_{index:03d}",
+                kind="connector",
+                semantic_role=role,
+                content={
+                    "source_id": (
+                        item_ids[index]
+                        if item_ids is not None
+                        else f"{object_id}_item_{index:03d}"
+                    ),
+                    "target_id": (
+                        item_ids[(index + 1) % count]
+                        if item_ids is not None
+                        else f"{object_id}_item_{(index + 1) % count:03d}"
+                    ),
+                    "label": "",
+                },
+                accessibility_label=f"{role} from item {index} to item {(index + 1) % count}",
+            )
+            for index in range(limit)
+        ]
+
+    @staticmethod
+    def _relation_connectors(
+        object_id: str,
+        concepts: list[SemanticConceptParameter],
+        item_ids: list[str],
+        relations: list[SemanticRelationParameter],
+        operator: RendererOperator,
+    ) -> list[VisualObjectSpec]:
+        """Compile every declared typed edge into a grounded connector."""
+
+        concept_ids = {concept.concept_id for concept in concepts}
+        object_by_concept = {
+            concept.concept_id: item_ids[index]
+            for index, concept in enumerate(concepts)
+            if index < len(item_ids)
+        }
+        connectors: list[VisualObjectSpec] = []
+        for index, relation in enumerate(relations[:24]):
+            if (
+                relation.source_id not in concept_ids
+                or relation.target_id not in concept_ids
+            ):
+                continue
+            label = relation.label or relation.relation.value.replace("_", " ")
+            connectors.append(
+                VisualObjectSpec(
+                    object_id=f"{object_id}_connector_{index:03d}",
+                    kind="connector",
+                    semantic_role=f"{operator.value}_relation",
+                    concept_ids=[relation.source_id, relation.target_id],
+                    content={
+                        "source_id": object_by_concept[relation.source_id],
+                        "target_id": object_by_concept[relation.target_id],
+                        "relation": relation.relation.value,
+                        "label": label,
+                    },
+                    accessibility_label=(
+                        f"{relation.source_id} {label} {relation.target_id}"
+                    ),
+                )
+            )
+        return connectors
 
     @staticmethod
     def _connector(object_id: str, index: int, source: int, target: int, role: str) -> VisualObjectSpec:
@@ -625,9 +1088,16 @@ class SemanticOperatorCompiler:
             "explicit" if any(child.kind == "connector" for child in children)
             else "none"
         )
+        bounded_content = {
+            "label": parameters.label,
+            "layout": layout,
+            "connector_mode": connector_mode,
+            "dsl_version": "1.0",
+            **content,
+        }
         return VisualObjectSpec(
             object_id=parameters.object_id, kind=kind, semantic_role="procedural_operator",
-            content={"label": parameters.label, "layout": layout, "connector_mode": connector_mode, **content}, children=children,
+            content=bounded_content, children=children,
             constraints=[LayoutConstraint(constraint_id=f"{parameters.object_id}_contain", type=ConstraintType.CONTAIN, subject_ids=child_ids, reference_id=parameters.object_id, strength=ConstraintStrength.REQUIRED), LayoutConstraint(constraint_id=f"{parameters.object_id}_layout", type=ConstraintType.DISTRIBUTE, subject_ids=[child.object_id for child in children if child.kind != "connector"], reference_id=parameters.object_id, parameters={"axis": layout, "gap": 32})],
             accessibility_label=f"{parameters.label} procedural {content.get('operator', kind)} operator",
         )

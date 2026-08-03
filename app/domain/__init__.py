@@ -51,6 +51,7 @@ from app.domain.quality import (
 from app.domain.storyboard import (
     AttentionCue,
     CameraIntent,
+    ShotPlan,
     Storyboard,
     VisualBeat,
     VisualObjectSpec,
@@ -77,6 +78,7 @@ __all__ = [
     "CameraIntent",
     "CameraOperation",
     "CameraPlan",
+    "ShotPlan",
     "ConceptEdge",
     "ConceptGraph",
     "ConceptNode",

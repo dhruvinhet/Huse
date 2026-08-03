@@ -26,6 +26,48 @@ class CameraIntent(BaseModel):
     emphasis: float = Field(default=0.5, ge=0, le=1)
 
 
+class ShotPlan(BaseModel):
+    """Deterministic occupancy and lifecycle policy for one teaching shot."""
+
+    enter: Literal["reveal", "draw", "fade"] = "reveal"
+    hold: Literal["focus", "compare", "trace", "hold"] = "focus"
+    exit: Literal["hide", "dim", "replace", "retain"] = "hide"
+    occupancy_target: tuple[float, float] = (0.35, 0.70)
+    max_active_objects: int = Field(default=12, ge=3, le=64)
+    focal_region: Literal["center", "left", "right", "top", "bottom"] = "center"
+    cleanup_policy: Literal["hide_non_target", "dim_non_target", "replace", "retain"] = "hide_non_target"
+
+    @classmethod
+    def for_purpose(cls, purpose: str) -> "ShotPlan":
+        """Create a bounded shot policy from the pedagogical purpose."""
+
+        if purpose == "summarize":
+            return cls(
+                enter="fade",
+                hold="hold",
+                exit="replace",
+                occupancy_target=(0.40, 0.65),
+                max_active_objects=8,
+            )
+        if purpose in {"transform", "demonstrate"}:
+            return cls(
+                enter="draw",
+                hold="trace",
+                exit="hide",
+                occupancy_target=(0.40, 0.70),
+                max_active_objects=10,
+            )
+        if purpose == "connect":
+            return cls(
+                enter="reveal",
+                hold="compare",
+                exit="hide",
+                occupancy_target=(0.35, 0.65),
+                max_active_objects=14,
+            )
+        return cls()
+
+
 class VisualObjectSpec(BaseModel):
     """Describe a semantic object before layout and rendering."""
 
@@ -70,6 +112,7 @@ class VisualBeat(BaseModel):
     operations: list[VisualOperation] = Field(min_length=1)
     attention: list[AttentionCue] = Field(default_factory=list)
     camera_intent: CameraIntent | None = None
+    shot_plan: ShotPlan | None = None
 
 
 class Storyboard(BaseModel):

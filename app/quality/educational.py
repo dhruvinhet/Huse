@@ -191,6 +191,12 @@ class EducationalQualityEvaluator:
                     for source_id in source_objects
                     for target_id in target_objects
                 )
+                represented = represented or any(
+                    source == edge.source_id
+                    and target == edge.target_id
+                    and relation == edge.relation.value
+                    for source, target, relation in connector_pairs
+                )
             else:
                 represented = any(
                     source == edge.source_id

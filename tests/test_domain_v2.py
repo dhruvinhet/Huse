@@ -164,6 +164,42 @@ def test_concept_graph_normalizes_teaching_labels_to_ids() -> None:
     assert graph.teaching_sequence == ["root", "leaf"]
 
 
+def test_concept_graph_repairs_unknown_and_missing_teaching_sequence_ids() -> None:
+    """Model sequence noise is repaired without losing declared concepts."""
+
+    graph = ConceptGraph.model_validate({
+        "objectives": ["Explain"],
+        "nodes": [
+            {
+                "concept_id": "root",
+                "label": "Root",
+                "definition": "The starting concept",
+                "importance": 1,
+                "teaching_order": 0,
+            },
+            {
+                "concept_id": "middle",
+                "label": "Middle",
+                "definition": "The intermediate concept",
+                "importance": 1,
+                "prerequisites": ["root"],
+                "teaching_order": 1,
+            },
+            {
+                "concept_id": "leaf",
+                "label": "Leaf",
+                "definition": "The final concept",
+                "importance": 1,
+                "prerequisites": ["middle"],
+                "teaching_order": 2,
+            },
+        ],
+        "teaching_sequence": ["root", "unknown", "root", "Leaf"],
+    })
+
+    assert graph.teaching_sequence == ["root", "middle", "leaf"]
+
+
 def test_concept_graph_drops_echoed_json_schema_metadata() -> None:
     """Schema definitions echoed by a model are not lesson data."""
 

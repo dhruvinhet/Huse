@@ -9,6 +9,7 @@ from app.domain.pedagogy import PedagogyPlan
 from app.domain.storyboard import (
     AttentionCue,
     CameraIntent,
+    ShotPlan,
     Storyboard,
     VisualBeat,
     VisualObjectSpec,
@@ -184,6 +185,7 @@ class TemplateCompiler:
 
         labels = [node.label for node in lesson.concept_graph.nodes]
         if match.template_id == "pipeline.v1":
+            parameters["dsl_version"] = "1.0"
             sequence = list(lesson.concept_graph.teaching_sequence)[:8]
             nodes = {
                 node.concept_id: node
@@ -397,6 +399,7 @@ class TemplateCompiler:
                         operation=shot.camera_operation,
                         target_ids=[root.object_id],
                     ),
+                    shot_plan=ShotPlan.for_purpose(shot.purpose),
                 )
             )
         return Storyboard(
