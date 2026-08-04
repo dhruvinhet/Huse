@@ -9,6 +9,7 @@ from app.domain.layout import (
 )
 from app.domain.storyboard import VisualObjectSpec
 from app.domain.visual_intent import RendererOperator
+from app.domain.semantic_bounds import bound_semantic_operands
 from app.templates.operator_templates import (
     GenericOperatorParameters,
     OperatorTemplate,
@@ -149,12 +150,13 @@ class PipelineTemplate:
         object_id = _identifier(parameters, "Pipeline_001")
         stages = _strings(parameters.get("stages"), ["Input", "Process", "Output"])
         if isinstance(parameters.get("concepts"), list) and parameters["concepts"]:
+            bounded = bound_semantic_operands(parameters)
             validated = GenericOperatorParameters.model_validate({
                 "object_id": object_id,
-                "label": str(parameters.get("label", "Pipeline")),
-                "operands": stages,
-                "concepts": parameters["concepts"],
-                "relations": parameters.get("relations", []),
+                "label": str(bounded.get("label", "Pipeline")),
+                "operands": stages[:10],
+                "concepts": bounded.get("concepts", []),
+                "relations": bounded.get("relations", []),
             })
             operator = (
                 RendererOperator.FLOW

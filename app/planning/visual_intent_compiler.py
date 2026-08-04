@@ -165,6 +165,11 @@ class VisualIntentCompiler:
             shot.renderer_operator,
             validated,
         )
+        root = self._ensure_relation_connectors(
+            root,
+            overview_relations,
+            lesson,
+        )
         evidence = VisualObjectSpec(
             object_id=ids["evidence"],
             kind="callout",
@@ -304,6 +309,70 @@ class VisualIntentCompiler:
             ),
             shot_plan=ShotPlan.for_purpose(purpose),
         )
+
+    @staticmethod
+    def _ensure_relation_connectors(
+        root: VisualObjectSpec,
+        relations: list[object],
+        lesson: LessonPlan,
+    ) -> VisualObjectSpec:
+        """Ground every graph edge even when an operator has custom geometry.
+
+        Some educational operators intentionally use specialised children and
+        therefore do not expose every lesson edge.  The semantic contract is
+        still authoritative: add a small explicit connector for any missing
+        edge so quality validation and the renderer cannot silently lose the
+        relationship.
+        """
+
+        objects = root.flatten()
+        by_concept: dict[str, VisualObjectSpec] = {}
+        existing: set[tuple[str, str, str]] = set()
+        for item in objects:
+            if item.kind == "connector":
+                relation = str(item.content.get("relation", ""))
+                for source in item.concept_ids[:1]:
+                    for target in item.concept_ids[1:2]:
+                        existing.add((source, target, relation))
+                continue
+            for concept_id in item.concept_ids:
+                by_concept.setdefault(concept_id, item)
+
+        labels = {
+            node.concept_id: node.label
+            for node in lesson.concept_graph.nodes
+        }
+        additions: list[VisualObjectSpec] = []
+        for index, edge in enumerate(relations):
+            source = by_concept.get(edge.source_id)
+            target = by_concept.get(edge.target_id)
+            relation = edge.relation.value
+            if source is None or target is None:
+                continue
+            if (edge.source_id, edge.target_id, relation) in existing:
+                continue
+            label = edge.label or relation.replace("_", " ")
+            additions.append(
+                VisualObjectSpec(
+                    object_id=f"{root.object_id}_grounded_relation_{index:03d}",
+                    kind="connector",
+                    semantic_role=f"grounded_relation_{relation}",
+                    concept_ids=[edge.source_id, edge.target_id],
+                    content={
+                        "source_id": source.object_id,
+                        "target_id": target.object_id,
+                        "relation": relation,
+                        "label": label,
+                    },
+                    accessibility_label=(
+                        f"{labels.get(edge.source_id, edge.source_id)} "
+                        f"{label} {labels.get(edge.target_id, edge.target_id)}"
+                    ),
+                )
+            )
+        if not additions:
+            return root
+        return root.model_copy(update={"children": [*root.children, *additions]})
 
     @staticmethod
     def _natural_phrase_intent(

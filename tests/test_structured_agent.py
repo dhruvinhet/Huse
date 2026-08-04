@@ -40,6 +40,24 @@ class StubClient:
         return next(self.responses)
 
 
+class NativeSchemaStubClient(StubClient):
+    """Stub an OpenAI-compatible client with native schema support."""
+
+    def __init__(self, responses: list[str]) -> None:
+        super().__init__(responses)
+        self.schemas: list[type[BaseModel] | None] = []
+
+    def generate_text(
+        self,
+        prompt: str,
+        temperature: float = 0.3,
+        response_schema: type[BaseModel] | None = None,
+    ) -> str:
+        self.prompts.append(prompt)
+        self.schemas.append(response_schema)
+        return next(self.responses)
+
+
 def test_truncated_json_gets_a_clean_retry() -> None:
     """EOF failures do not cause the broken response to be echoed on retry."""
 
@@ -132,6 +150,21 @@ def test_nvidia_prompt_removes_schema_prose_and_payload_indentation() -> None:
     assert "Small artifact used to exercise the retry behavior" not in prompt
     assert '"input":"value"' in prompt
     assert '"required":["name"]' in prompt
+
+
+def test_native_provider_schema_is_sent_out_of_band() -> None:
+    """A schema-capable provider does not receive duplicated schema prose."""
+
+    client = NativeSchemaStubClient(['{"name":"complete"}'])
+    agent = StructuredGeminiAgent(
+        client, TinyArtifact, "Tiny Planner", max_attempts=1
+    )
+
+    agent.generate("Return a tiny artifact.", {"input": "value"})
+
+    assert client.schemas == [TinyArtifact]
+    assert "JSON Schema:" not in client.prompts[0]
+    assert "provider enforces the response schema" in client.prompts[0]
 
 
 def test_nvidia_storyboard_uses_one_paid_attempt_before_local_fallback() -> None:

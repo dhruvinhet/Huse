@@ -1,6 +1,7 @@
 """SVG rendering with cached resvg rasterization and primitive fallback."""
 
 from io import BytesIO
+from math import atan2, cos, degrees, pi, sin, sqrt
 import re
 from pathlib import Path
 from xml.etree import ElementTree
@@ -15,6 +16,114 @@ try:
     import resvg_py
 except ImportError:  # pragma: no cover - dependency diagnostics are tested indirectly
     resvg_py = None
+
+
+def _sample_cubic(
+    start: tuple[float, float],
+    control_1: tuple[float, float],
+    control_2: tuple[float, float],
+    end: tuple[float, float],
+    steps: int = 8,
+) -> list[tuple[float, float]]:
+    """Approximate a cubic SVG curve with a short deterministic polyline."""
+
+    result: list[tuple[float, float]] = []
+    for index in range(1, steps + 1):
+        t = index / steps
+        inverse = 1.0 - t
+        result.append((
+            inverse ** 3 * start[0]
+            + 3 * inverse ** 2 * t * control_1[0]
+            + 3 * inverse * t ** 2 * control_2[0]
+            + t ** 3 * end[0],
+            inverse ** 3 * start[1]
+            + 3 * inverse ** 2 * t * control_1[1]
+            + 3 * inverse * t ** 2 * control_2[1]
+            + t ** 3 * end[1],
+        ))
+    return result
+
+
+def _sample_quadratic(
+    start: tuple[float, float],
+    control: tuple[float, float],
+    end: tuple[float, float],
+    steps: int = 8,
+) -> list[tuple[float, float]]:
+    """Approximate a quadratic SVG curve with a deterministic polyline."""
+
+    result: list[tuple[float, float]] = []
+    for index in range(1, steps + 1):
+        t = index / steps
+        inverse = 1.0 - t
+        result.append((
+            inverse ** 2 * start[0]
+            + 2 * inverse * t * control[0]
+            + t ** 2 * end[0],
+            inverse ** 2 * start[1]
+            + 2 * inverse * t * control[1]
+            + t ** 2 * end[1],
+        ))
+    return result
+
+
+def _sample_arc(
+    start: tuple[float, float],
+    values: list[float],
+    steps: int = 12,
+) -> list[tuple[float, float]]:
+    """Approximate one SVG elliptical arc using the endpoint parameterization."""
+
+    rx, ry, rotation, large_arc, sweep, end_x, end_y = values
+    rx, ry = abs(rx), abs(ry)
+    end = (end_x, end_y)
+    if rx == 0 or ry == 0 or start == end:
+        return [end]
+    phi = rotation * pi / 180.0
+    cos_phi, sin_phi = cos(phi), sin(phi)
+    dx, dy = (start[0] - end[0]) / 2, (start[1] - end[1]) / 2
+    x_prime = cos_phi * dx + sin_phi * dy
+    y_prime = -sin_phi * dx + cos_phi * dy
+    radius_scale = (x_prime * x_prime) / (rx * rx) + (y_prime * y_prime) / (ry * ry)
+    if radius_scale > 1:
+        scale = sqrt(radius_scale)
+        rx *= scale
+        ry *= scale
+    denominator = rx * rx * y_prime * y_prime + ry * ry * x_prime * x_prime
+    numerator = max(0.0, rx * rx * ry * ry - denominator)
+    coefficient = 0.0 if denominator == 0 else sqrt(numerator / denominator)
+    if bool(large_arc) == bool(sweep):
+        coefficient = -coefficient
+    center_x_prime = coefficient * rx * y_prime / ry
+    center_y_prime = -coefficient * ry * x_prime / rx
+    center = (
+        cos_phi * center_x_prime - sin_phi * center_y_prime + (start[0] + end[0]) / 2,
+        sin_phi * center_x_prime + cos_phi * center_y_prime + (start[1] + end[1]) / 2,
+    )
+
+    def angle(vector_x: float, vector_y: float) -> float:
+        return atan2(vector_y, vector_x)
+
+    start_angle = angle(
+        (x_prime - center_x_prime) / rx,
+        (y_prime - center_y_prime) / ry,
+    )
+    delta = angle(
+        (-x_prime - center_x_prime) / rx,
+        (-y_prime - center_y_prime) / ry,
+    ) - start_angle
+    if not sweep and delta > 0:
+        delta -= 2 * pi
+    if sweep and delta < 0:
+        delta += 2 * pi
+    result: list[tuple[float, float]] = []
+    for index in range(1, steps + 1):
+        theta = start_angle + delta * index / steps
+        result.append((
+            center[0] + rx * cos_phi * cos(theta) - ry * sin_phi * sin(theta),
+            center[1] + rx * sin_phi * cos(theta) + ry * cos_phi * sin(theta),
+        ))
+    return result
 
 
 class SVGRenderer:
@@ -152,6 +261,11 @@ class SVGRenderer:
         """Scale and draw supported SVG child elements into an object box."""
 
         drawing = ImageDraw.Draw(canvas)
+        parents = {
+            child: parent
+            for parent in root.iter()
+            for child in list(parent)
+        }
         scale_x = obj.width / view_width
         scale_y = obj.height / view_height
         left = obj.x - obj.width / 2
@@ -181,8 +295,16 @@ class SVGRenderer:
                 ]
                 drawing.line(
                     points,
-                    fill=element.get("stroke", "black"),
-                    width=self._stroke_width(element, scale_x, scale_y),
+                    fill=self._paint(
+                        self._inherited(element, parents, "stroke", "none"),
+                        self._inherited(element, parents, "color", "black"),
+                    ),
+                    width=self._stroke_width(
+                        element,
+                        scale_x,
+                        scale_y,
+                        self._inherited(element, parents, "stroke-width", "1"),
+                    ),
                 )
                 rendered_elements += 1
             elif tag == "polygon":
@@ -194,7 +316,13 @@ class SVGRenderer:
                     scale_y,
                 )
                 if points:
-                    drawing.polygon(points, fill=element.get("fill", "black"))
+                    drawing.polygon(
+                        points,
+                        fill=self._paint(
+                            self._inherited(element, parents, "fill", "black"),
+                            self._inherited(element, parents, "color", "black"),
+                        ),
+                    )
                     rendered_elements += 1
             elif tag == "rect":
                 x, y = self._point(
@@ -209,9 +337,20 @@ class SVGRenderer:
                 height = self._number(element.get("height")) * scale_y
                 drawing.rectangle(
                     (x, y, x + width, y + height),
-                    fill=self._paint(element.get("fill")),
-                    outline=self._paint(element.get("stroke", "black")),
-                    width=self._stroke_width(element, scale_x, scale_y),
+                    fill=self._paint(
+                        self._inherited(element, parents, "fill", "black"),
+                        self._inherited(element, parents, "color", "black"),
+                    ),
+                    outline=self._paint(
+                        self._inherited(element, parents, "stroke", "none"),
+                        self._inherited(element, parents, "color", "black"),
+                    ),
+                    width=self._stroke_width(
+                        element,
+                        scale_x,
+                        scale_y,
+                        self._inherited(element, parents, "stroke-width", "1"),
+                    ),
                 )
                 rendered_elements += 1
             elif tag == "circle":
@@ -232,9 +371,20 @@ class SVGRenderer:
                         center_x + radius_x,
                         center_y + radius_y,
                     ),
-                    fill=self._paint(element.get("fill")),
-                    outline=self._paint(element.get("stroke", "black")),
-                    width=self._stroke_width(element, scale_x, scale_y),
+                    fill=self._paint(
+                        self._inherited(element, parents, "fill", "black"),
+                        self._inherited(element, parents, "color", "black"),
+                    ),
+                    outline=self._paint(
+                        self._inherited(element, parents, "stroke", "none"),
+                        self._inherited(element, parents, "color", "black"),
+                    ),
+                    width=self._stroke_width(
+                        element,
+                        scale_x,
+                        scale_y,
+                        self._inherited(element, parents, "stroke-width", "1"),
+                    ),
                 )
                 rendered_elements += 1
             elif tag == "ellipse":
@@ -255,9 +405,20 @@ class SVGRenderer:
                         center_x + radius_x,
                         center_y + radius_y,
                     ),
-                    fill=self._paint(element.get("fill")),
-                    outline=self._paint(element.get("stroke", "black")),
-                    width=self._stroke_width(element, scale_x, scale_y),
+                    fill=self._paint(
+                        self._inherited(element, parents, "fill", "black"),
+                        self._inherited(element, parents, "color", "black"),
+                    ),
+                    outline=self._paint(
+                        self._inherited(element, parents, "stroke", "none"),
+                        self._inherited(element, parents, "color", "black"),
+                    ),
+                    width=self._stroke_width(
+                        element,
+                        scale_x,
+                        scale_y,
+                        self._inherited(element, parents, "stroke-width", "1"),
+                    ),
                 )
                 rendered_elements += 1
             elif tag == "path":
@@ -270,6 +431,20 @@ class SVGRenderer:
                     scale_y,
                     view_min_x,
                     view_min_y,
+                    fill=self._paint(
+                        self._inherited(element, parents, "fill", "black"),
+                        self._inherited(element, parents, "color", "black"),
+                    ),
+                    stroke=self._paint(
+                        self._inherited(element, parents, "stroke", "none"),
+                        self._inherited(element, parents, "color", "black"),
+                    ),
+                    stroke_width=self._stroke_width(
+                        element,
+                        scale_x,
+                        scale_y,
+                        self._inherited(element, parents, "stroke-width", "1"),
+                    ),
                 )
             elif tag == "text" and (element.text or "").strip():
                 x, y = self._point(
@@ -296,7 +471,10 @@ class SVGRenderer:
                 drawing.text(
                     (x, y),
                     element.text.strip(),
-                    fill=self._paint(element.get("fill", "black")),
+                    fill=self._paint(
+                        self._inherited(element, parents, "fill", "black"),
+                        self._inherited(element, parents, "color", "black"),
+                    ),
                     font=font,
                     anchor=anchor,
                 )
@@ -314,6 +492,10 @@ class SVGRenderer:
         scale_y: float,
         view_min_x: float,
         view_min_y: float,
+        *,
+        fill: str | None,
+        stroke: str | None,
+        stroke_width: int,
     ) -> int:
         """Render common icon paths without requiring a native SVG library.
 
@@ -332,6 +514,8 @@ class SVGRenderer:
         command = ""
         current = (0.0, 0.0)
         start = current
+        previous_cubic_control: tuple[float, float] | None = None
+        previous_quadratic_control: tuple[float, float] | None = None
         subpaths: list[tuple[list[tuple[float, float]], bool]] = []
         points: list[tuple[float, float]] = []
         closed = False
@@ -354,6 +538,8 @@ class SVGRenderer:
                     closed = True
                     finish()
                     command = ""
+                    previous_cubic_control = None
+                    previous_quadratic_control = None
                     continue
             if not command or command.upper() not in arity:
                 index += 1
@@ -369,16 +555,22 @@ class SVGRenderer:
             index += count
             relative = command.islower()
             old = current
-            if upper in {"M", "L", "T"}:
+            if upper in {"M", "L"}:
                 target = (values[0], values[1])
             elif upper == "H":
                 target = (values[0], old[1])
             elif upper == "V":
                 target = (old[0], values[0])
+            elif upper == "T":
+                target = (values[0], values[1])
             elif upper in {"C", "S", "Q"}:
                 target = (values[-2], values[-1])
-            else:  # A/a: the final pair is the arc endpoint.
+            elif upper == "A":
+                # A/a: the final pair is the arc endpoint.
                 target = (values[5], values[6])
+            else:
+                command = ""
+                continue
             if relative:
                 target = (old[0] + target[0], old[1] + target[1])
             current = target
@@ -388,14 +580,70 @@ class SVGRenderer:
                 start = target
                 points = [target]
                 command = "l" if relative else "L"
+                previous_cubic_control = None
+                previous_quadratic_control = None
+            elif upper == "C":
+                controls = [
+                    (values[0], values[1]),
+                    (values[2], values[3]),
+                ]
+                if relative:
+                    controls = [
+                        (old[0] + x, old[1] + y) for x, y in controls
+                    ]
+                points.extend(_sample_cubic(old, controls[0], controls[1], target))
+                previous_cubic_control = controls[1]
+                previous_quadratic_control = None
+            elif upper == "S":
+                control = (
+                    (
+                        2 * old[0] - previous_cubic_control[0],
+                        2 * old[1] - previous_cubic_control[1],
+                    )
+                    if previous_cubic_control is not None
+                    else old
+                )
+                second = (values[0], values[1])
+                if relative:
+                    second = (old[0] + second[0], old[1] + second[1])
+                points.extend(_sample_cubic(old, control, second, target))
+                previous_cubic_control = second
+                previous_quadratic_control = None
+            elif upper == "Q":
+                control = (values[0], values[1])
+                if relative:
+                    control = (old[0] + control[0], old[1] + control[1])
+                points.extend(_sample_quadratic(old, control, target))
+                previous_quadratic_control = control
+                previous_cubic_control = None
+            elif upper == "T":
+                control = (
+                    (
+                        2 * old[0] - previous_quadratic_control[0],
+                        2 * old[1] - previous_quadratic_control[1],
+                    )
+                    if previous_quadratic_control is not None
+                    else old
+                )
+                points.extend(_sample_quadratic(old, control, target))
+                previous_quadratic_control = control
+                previous_cubic_control = None
+            elif upper == "A":
+                arc_values = values
+                if relative:
+                    arc_values = [*values]
+                    arc_values[5] += old[0]
+                    arc_values[6] += old[1]
+                points.extend(_sample_arc(old, arc_values))
+                previous_cubic_control = None
+                previous_quadratic_control = None
             else:
                 points.append(target)
+                previous_cubic_control = None
+                previous_quadratic_control = None
         finish()
 
         rendered = 0
-        fill = self._paint(element.get("fill", "black"))
-        stroke = self._paint(element.get("stroke"))
-        stroke_width = self._stroke_width(element, scale_x, scale_y)
         for path_points, is_closed in subpaths:
             if len(path_points) < 2:
                 continue
@@ -483,16 +731,44 @@ class SVGRenderer:
         element: ElementTree.Element,
         scale_x: float,
         scale_y: float,
+        value: str | None = None,
     ) -> int:
         """Scale an SVG stroke width to the target object box."""
 
-        source_width = self._number(element.get("stroke-width") or "1")
-        return max(1, round(source_width * (scale_x + scale_y) / 2))
+        source_width = self._number(value or element.get("stroke-width") or "1")
+        # Catalog icons are commonly authored at 24x24 but laid out in a
+        # several-hundred-pixel semantic box.  Scaling a 2px source stroke
+        # linearly makes the fallback paint giant black bars.  Native SVG
+        # rasterizers handle this correctly; keep the dependency-free fallback
+        # visually legible and bounded instead.
+        return min(4, max(1, round(source_width * (scale_x + scale_y) / 2)))
 
     @staticmethod
-    def _paint(value: str | None) -> str | None:
+    def _paint(value: str | None, current_color: str = "black") -> str | None:
         """Convert the SVG none keyword to Pillow's transparent paint."""
 
         if value is None or value.lower() == "none":
             return None
-        return value
+        return current_color if value.casefold() == "currentcolor" else value
+
+    @staticmethod
+    def _inherited(
+        element: ElementTree.Element,
+        parents: dict[ElementTree.Element, ElementTree.Element],
+        attribute: str,
+        default: str,
+    ) -> str:
+        """Resolve presentation attributes through SVG parent groups/styles."""
+
+        current: ElementTree.Element | None = element
+        while current is not None:
+            value = current.get(attribute)
+            if value is not None and value.strip():
+                return value.strip()
+            style = current.get("style", "")
+            for declaration in style.split(";"):
+                key, separator, declared = declaration.partition(":")
+                if separator and key.strip() == attribute and declared.strip():
+                    return declared.strip()
+            current = parents.get(current)
+        return default

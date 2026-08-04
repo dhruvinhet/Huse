@@ -98,7 +98,12 @@ class GeminiClient:
             http_options=types.HttpOptions(timeout=None),
         )
 
-    def generate_text(self, prompt: str, temperature: float = 0.3) -> str:
+    def generate_text(
+        self,
+        prompt: str,
+        temperature: float = 0.3,
+        response_schema: object | None = None,
+    ) -> str:
         """Generate and return stripped text for a nonempty prompt."""
 
         if not prompt or not prompt.strip():
@@ -113,18 +118,29 @@ class GeminiClient:
         logger.debug("{} request prompt: {}", self.PROVIDER, prompt)
 
         if self.PROVIDER == "nvidia":
-            return self._generate_nvidia(prompt, temperature)
+            return self._generate_nvidia(prompt, temperature, response_schema)
 
-        return self._generate_gemini(prompt, temperature)
+        return self._generate_gemini(prompt, temperature, response_schema)
 
-    def _generate_gemini(self, prompt: str, temperature: float) -> str:
+    def _generate_gemini(
+        self,
+        prompt: str,
+        temperature: float,
+        response_schema: object | None = None,
+    ) -> str:
         """Generate text through the Google GenAI SDK."""
 
         try:
+            config_kwargs: dict[str, object] = {"temperature": temperature}
+            if response_schema is not None:
+                config_kwargs.update({
+                    "response_mime_type": "application/json",
+                    "response_schema": response_schema,
+                })
             response = self._client.models.generate_content(
                 model=self.MODEL_NAME,
                 contents=prompt,
-                config=types.GenerateContentConfig(temperature=temperature),
+                config=types.GenerateContentConfig(**config_kwargs),
             )
         except httpx.TimeoutException as exc:
             logger.error("Gemini request timed out: {}", exc)
@@ -153,7 +169,12 @@ class GeminiClient:
         logger.debug("Gemini response text: {}", stripped_text)
         return stripped_text
 
-    def _generate_nvidia(self, prompt: str, temperature: float) -> str:
+    def _generate_nvidia(
+        self,
+        prompt: str,
+        temperature: float,
+        response_schema: object | None = None,
+    ) -> str:
         """Generate text through NVIDIA's OpenAI-compatible endpoint."""
 
         base_url = getattr(
@@ -170,6 +191,21 @@ class GeminiClient:
         }
         if self.MODEL_NAME == "nvidia/nemotron-3-nano-30b-a3b":
             payload["chat_template_kwargs"] = {"enable_thinking": False}
+        if response_schema is not None:
+            schema = (
+                response_schema.model_json_schema()
+                if hasattr(response_schema, "model_json_schema")
+                else response_schema
+            )
+            if isinstance(schema, dict):
+                payload["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "structured_artifact",
+                        "strict": True,
+                        "schema": schema,
+                    },
+                }
         headers = {
             "Authorization": f"Bearer {settings.NVIDIA_API_KEY}",
             "Accept": "application/json",

@@ -2,10 +2,17 @@
 
 import re
 
+from loguru import logger
+
 from app.application.ports.knowledge import TemplateLibrary
 from app.domain.lesson import LessonPlan
 from app.domain.operations import OperationType, VisualOperation
 from app.domain.pedagogy import PedagogyPlan
+from app.domain.semantic_bounds import (
+    MAX_SEMANTIC_CONCEPTS,
+    MAX_SEMANTIC_RELATIONS,
+    bound_semantic_operands,
+)
 from app.domain.storyboard import (
     AttentionCue,
     CameraIntent,
@@ -84,6 +91,25 @@ class TemplateCompiler:
         if selection is None:
             return None
         parameters = self._validated_parameters(selection, lesson)
+        raw_concept_count = len(parameters.get("concepts", []))
+        raw_relation_count = len(parameters.get("relations", []))
+        parameters = bound_semantic_operands(
+            parameters,
+            preferred_concept_ids=selection.concept_ids,
+        )
+        if (
+            raw_concept_count != len(parameters.get("concepts", []))
+            or raw_relation_count != len(parameters.get("relations", []))
+        ):
+            logger.warning(
+                "Bound template '{}' semantic operands from {} concepts/{} "
+                "relations to {}/{} for one visual shot",
+                selection.template_id,
+                raw_concept_count,
+                raw_relation_count,
+                MAX_SEMANTIC_CONCEPTS,
+                MAX_SEMANTIC_RELATIONS,
+            )
         root = library.instantiate(selection.template_id, parameters)
         root = self._ground_object(root, lesson)
         root = self._mark_connector_ownership(root)
@@ -177,7 +203,7 @@ class TemplateCompiler:
             elif isinstance(value, list):
                 cleaned = [
                     str(item).strip()[:80]
-                    for item in value[:12]
+                    for item in value[:10]
                     if str(item).strip()
                 ]
                 if cleaned:

@@ -135,6 +135,21 @@ class VisualStateTransitionEngine:
                 for object_id, _state in candidates[: max(1, shot_plan.max_active_objects - len(roots))]
             )
 
+        # A resolved illustration is part of its concept's visual identity.
+        # Carry descendants whenever a parent is focused; otherwise shot
+        # cleanup can leave a small text card behind while hiding its asset.
+        # Asset children are then exempted from the teaching-object budget
+        # below: they occupy pixels, but do not represent an additional idea.
+        descendants: list[str] = []
+        for object_id in list(focus):
+            if states[object_id].parent_id is not None:
+                descendants.extend(states[object_id].child_ids)
+        while descendants:
+            child_id = descendants.pop()
+            if child_id in states and child_id not in focus:
+                focus.add(child_id)
+                descendants.extend(states[child_id].child_ids)
+
         # Preserve ancestors so a focused child remains attached to its
         # semantic container, then trim the least important leaves if the
         # shot's active-object budget is exceeded.
@@ -148,6 +163,7 @@ class VisualStateTransitionEngine:
             object_id
             for object_id in focus
             if states[object_id].kind != "connector"
+            and states[object_id].kind != "semantic_asset"
             and states[object_id].parent_id is not None
         ]
         budget = max(1, shot_plan.max_active_objects - len(roots))
@@ -173,6 +189,7 @@ class VisualStateTransitionEngine:
                 object_id
                 for object_id in focus
                 if states[object_id].kind != "connector"
+                and states[object_id].kind != "semantic_asset"
                 and object_id not in roots
             ]
         )

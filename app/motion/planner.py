@@ -1,6 +1,7 @@
 """Distribute pedagogical animation events across phrase timing."""
 
 from collections import defaultdict
+import re
 
 from app.domain.layout import LaidOutNode, LayoutPlan
 from app.domain.motion import MotionEvent, MotionPlan
@@ -9,15 +10,36 @@ from app.domain.operations import OperationType, VisualOperation
 from app.domain.storyboard import Storyboard
 
 
+_STOP_WORDS = {
+    "the", "and", "for", "from", "with", "into", "then", "this",
+    "that", "item", "component", "visual", "operator", "relation",
+}
+
+
+def _tokens(value: object) -> set[str]:
+    """Normalize labels and narration words for semantic matching."""
+
+    return set(re.findall(r"[a-z0-9]+", str(value).casefold()))
+
+
+def _alias_word_score(aliases: set[str], word: object) -> int:
+    """Score an exact readable alias match for one spoken word."""
+
+    word_tokens = _tokens(word)
+    if not word_tokens:
+        return 0
+    return sum(2 if token in aliases else 0 for token in word_tokens)
+
+
 class SemanticAnimationPlanner:
     """Choose animation strategies from object semantics and operations."""
 
     MIN_DURATION = 0.15
 
     _KIND_STRATEGIES = {
-        "text": "handwriting",
-        "label": "handwriting",
-        "annotation": "handwriting",
+        "text": "glyph_stroke",
+        "label": "glyph_stroke",
+        "annotation": "glyph_stroke",
         "equation": "write_left_to_right",
         "array": "reveal_cell_by_cell",
         "array_cell": "reveal_cell",
@@ -32,8 +54,8 @@ class SemanticAnimationPlanner:
         "probability_distribution": "grow_distribution",
         "histogram_bar": "grow_bar",
         "transformer_block": "reveal_components",
-        "component": "outline_then_label",
-        "semantic_asset": "stroke_reveal",
+        "component": "glyph_stroke",
+        "semantic_asset": "svg_path_reveal",
         "comparison": "split_reveal",
         "timeline": "timeline_trace",
         "cycle": "cycle_trace",
@@ -42,14 +64,16 @@ class SemanticAnimationPlanner:
         "flowchart": "decision_flow",
         "venn": "overlap_reveal",
         "bar_chart": "grow_distribution",
-        "line_chart": "stroke_reveal",
+        "line_chart": "plot_trace",
         "equation_derivation": "write_left_to_right",
         "code_trace": "trace_steps",
     }
 
     _OPERATOR_STRATEGIES = {
+        "icon": "glyph_stroke",
+        "group": "group_focus",
         "flow": "sankey_flow",
-        "process": "sankey_flow",
+        "process": "process_trace",
         "cause_effect": "cause_effect_flow",
         "timeline": "timeline_trace",
         "cycle": "cycle_trace",
@@ -68,6 +92,22 @@ class SemanticAnimationPlanner:
         "transform": "morph_state",
         "equation": "derivation_stack",
         "code_trace": "trace_steps",
+        # Semantic families that inherit a parent operator need an explicit
+        # adapter too; otherwise their children silently fall back to generic
+        # glyph reveals and every diagram feels like the same card stack.
+        "spatial": "cutaway_reveal",
+        "binary_search": "trace_steps",
+        "sorting": "stage_flow",
+        "graph_traversal": "cycle_trace",
+        "neural_network": "layer_stack",
+        "protocol": "signal_trace",
+        "system": "sankey_flow",
+        "tree_index": "layer_stack",
+        "scheduling": "timeline_trace",
+        "memory_map": "layer_stack",
+        "hash_map": "matrix_cell_sequence",
+        "blockchain": "stage_flow",
+        "semantic_structure": "group_focus",
     }
 
     _OPERATION_STRATEGIES = {
@@ -97,6 +137,7 @@ class SemanticAnimationPlanner:
 
         beat_windows = self._beat_windows(alignment)
         kind_index = self._kind_index(layout)
+        alias_index = self._alias_index(storyboard)
         events: list[MotionEvent] = []
         for beat in storyboard.beats:
             try:
@@ -106,7 +147,7 @@ class SemanticAnimationPlanner:
                     f"audio alignment is missing storyboard beat {beat.beat_id}"
                 ) from exc
             work_items: list[
-                tuple[str, str, VisualOperation | None, list[str]]
+                tuple[str, str, VisualOperation | None, list[str], set[str]]
             ] = []
             for operation in beat.operations:
                 target_groups = (
@@ -123,8 +164,10 @@ class SemanticAnimationPlanner:
                         operation.operation_id,
                         operation,
                         targets,
+                        aliases,
                     )
                     for index, targets in enumerate(target_groups, start=1)
+                    for aliases in [self._target_aliases(targets, alias_index)]
                 )
             work_items.extend(
                 (
@@ -132,6 +175,7 @@ class SemanticAnimationPlanner:
                     f"{beat.beat_id}_attention_{index:03d}",
                     None,
                     cue.target_ids,
+                    self._target_aliases(cue.target_ids, alias_index),
                 )
                 for index, cue in enumerate(beat.attention, start=1)
             )
@@ -139,7 +183,7 @@ class SemanticAnimationPlanner:
                 beat.beat_id,
                 start,
                 end,
-                len(work_items),
+                [item[4] for item in work_items],
                 alignment,
             )
             for index, (
@@ -147,6 +191,7 @@ class SemanticAnimationPlanner:
                 operation_id,
                 operation,
                 target_ids,
+                _aliases,
             ) in enumerate(work_items):
                 event_start = anchors[index]
                 next_start = (
@@ -158,7 +203,7 @@ class SemanticAnimationPlanner:
                 available = max(1e-6, end - event_start)
                 duration = min(
                     available,
-                    max(min(self.MIN_DURATION, available), slot * 0.82),
+                    max(min(self.MIN_DURATION, available), slot),
                 )
                 strategy = (
                     "attention_focus"
@@ -177,7 +222,14 @@ class SemanticAnimationPlanner:
                         easing="ease_in_out",
                         parameters={
                             "beat_purpose": beat.purpose,
-                            "sync": "word" if alignment.words else "phrase",
+                            "sync": (
+                                "word"
+                                if alignment.words
+                                and any(word.confidence >= 0.8 for word in alignment.words)
+                                else "estimated_word"
+                                if alignment.words
+                                else "phrase"
+                            ),
                             "operation_type": (
                                 operation.operation.value
                                 if operation is not None
@@ -193,11 +245,12 @@ class SemanticAnimationPlanner:
         beat_id: str,
         start: float,
         end: float,
-        count: int,
+        item_aliases: list[set[str]],
         alignment: AlignedAudio,
     ) -> list[float]:
         """Anchor visual actions to spoken word onsets when available."""
 
+        count = len(item_aliases)
         if count <= 0:
             return []
         words = [word for word in alignment.words if word.beat_id == beat_id]
@@ -206,11 +259,102 @@ class SemanticAnimationPlanner:
             return [start + index * slot for index in range(count)]
         if count == 1:
             return [words[0].audio_start]
-        last_index = len(words) - 1
-        return [
-            words[round(index * last_index / (count - 1))].audio_start
-            for index in range(count)
+
+        matched: dict[int, int] = {}
+        used_words: set[int] = set()
+        for item_index, aliases in enumerate(item_aliases):
+            best: tuple[int, int] | None = None
+            best_word_index: int | None = None
+            for word_index, word in enumerate(words):
+                if word_index in used_words:
+                    continue
+                score = _alias_word_score(aliases, word.text)
+                candidate = (score, -word_index)
+                if score > 0 and (best is None or candidate > best):
+                    best = candidate
+                    best_word_index = word_index
+            if best_word_index is not None:
+                matched[item_index] = best_word_index
+                used_words.add(best_word_index)
+
+        unused_word_indexes = [
+            index for index in range(len(words)) if index not in used_words
         ]
+        fallback_indexes = iter(unused_word_indexes)
+        anchors: list[float] = []
+        for item_index in range(count):
+            word_index = matched.get(item_index)
+            if word_index is None:
+                word_index = next(
+                    fallback_indexes,
+                    round(item_index * (len(words) - 1) / (count - 1)),
+                )
+            anchor = min(end, max(start, words[word_index].audio_start))
+            if anchors:
+                anchor = max(anchor, anchors[-1])
+            anchors.append(anchor)
+        # A matched keyword can occur several seconds into a phrase.  Keep a
+        # first visual action at the phrase onset so the shot never opens on a
+        # static canvas while narration is already explaining it.  Subsequent
+        # actions remain anchored to their matched word onsets.
+        if anchors and anchors[0] - start > 1.0:
+            anchors[0] = start
+        return anchors
+
+    @staticmethod
+    def _alias_index(storyboard: Storyboard) -> dict[str, set[str]]:
+        """Collect readable labels from deterministic CREATE object trees."""
+
+        aliases: dict[str, set[str]] = {}
+
+        def visit(raw: object) -> None:
+            if not isinstance(raw, dict):
+                return
+            object_id = str(raw.get("object_id", "")).strip()
+            if not object_id:
+                return
+            values: list[object] = [
+                object_id,
+                raw.get("accessibility_label", ""),
+                raw.get("semantic_role", ""),
+            ]
+            content = raw.get("content")
+            if isinstance(content, dict):
+                values.extend(
+                    content.get(key, "")
+                    for key in ("label", "detail", "value", "operator")
+                )
+            aliases[object_id] = {
+                token
+                for value in values
+                for token in _tokens(value)
+                if len(token) > 2 and token not in _STOP_WORDS
+            }
+            children = raw.get("children")
+            if isinstance(children, list):
+                for child in children:
+                    visit(child)
+
+        for beat in storyboard.beats:
+            for operation in beat.operations:
+                objects = operation.arguments.get("objects")
+                if isinstance(objects, list):
+                    for raw in objects:
+                        visit(raw)
+        return aliases
+
+    @staticmethod
+    def _target_aliases(
+        target_ids: list[str],
+        alias_index: dict[str, set[str]],
+    ) -> set[str]:
+        """Return readable aliases for one motion event's targets."""
+
+        return {
+            token
+            for target_id in target_ids
+            for token in alias_index.get(target_id, set())
+        }
 
     def _expanded_targets(
         self,

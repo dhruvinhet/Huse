@@ -65,7 +65,18 @@ class VisualDensityPlanner:
                     VisualObjectSpec.model_validate(item)
                     for item in raw_objects
                 ]
-                count += sum(len(root.flatten()) for root in definitions)
+                # An asset child is a visual treatment of its parent concept,
+                # not another teaching object.  Counting it against the
+                # cognitive-density budget would make adding a grounded SVG
+                # fail lessons that previously passed with the same concepts.
+                count += sum(
+                    sum(
+                        1
+                        for item in root.flatten()
+                        if item.kind != "semantic_asset"
+                    )
+                    for root in definitions
+                )
             budget = self.budget(audience, beat.estimated_duration)
             if count > budget.maximum_objects:
                 violations.append(

@@ -15,6 +15,7 @@ from app.semantic_assets import (
 )
 from app.models.render import RenderableObject
 from app.renderers.svg_renderer import SVGRenderer
+import app.renderers.svg_renderer as svg_renderer_module
 from tests.test_domain_v2 import storyboard
 
 
@@ -131,6 +132,41 @@ def test_full_catalog_path_svg_is_renderable_and_cached_without_cairo() -> None:
         ),
     )
     assert len(renderer._raster_cache) == 1
+
+
+def test_fallback_svg_renderer_preserves_inherited_outline_styles(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Parent fill/stroke styles must not turn outline icons into black blocks."""
+
+    source = tmp_path / "outline.svg"
+    source.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" '
+        'viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'color="#202124" stroke-width="2">'
+        '<path d="M4 4h16v16H4z"/></svg>',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(svg_renderer_module, "resvg_py", None)
+    canvas = Image.new("RGB", (120, 120), "white")
+
+    assert SVGRenderer().render(
+        canvas,
+        RenderableObject(
+            object_id="outline",
+            type="svg",
+            content=source.as_posix(),
+            x=60,
+            y=60,
+            width=96,
+            height=96,
+            animation="none",
+            start_time=0,
+            end_time=1,
+        ),
+    )
+    assert canvas.getpixel((60, 60)) == (255, 255, 255)
 
 
 def test_exact_full_pack_name_beats_a_related_alias() -> None:

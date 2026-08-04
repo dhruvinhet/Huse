@@ -1,7 +1,13 @@
 """Tests for authoritative deterministic template compilation."""
 
 from app.domain.generation import AudienceProfile
-from app.domain.lesson import ConceptGraph, ConceptNode, LessonPlan
+from app.domain.lesson import (
+    ConceptEdge,
+    ConceptGraph,
+    ConceptNode,
+    ConceptRelation,
+    LessonPlan,
+)
 from app.domain.operations import OperationType
 from app.domain.storyboard import VisualObjectSpec
 from app.domain.strategy import TemplateMatch
@@ -161,3 +167,74 @@ def test_builtin_match_compiles_complete_visual_program() -> None:
     assert [beat.teaching_intent for beat in program.storyboard.beats] == [
         shot.visual_obligation for shot in route.shots
     ]
+
+
+def test_compiler_bounds_oversized_semantic_graph_before_validation() -> None:
+    """Large model graphs become a bounded, connected visual program."""
+
+    nodes = [
+        ConceptNode(
+            concept_id=str(index),
+            label=f"Concept {index}",
+            definition=f"Definition {index}.",
+            importance=(index % 5) / 4,
+            teaching_order=index,
+        )
+        for index in range(15)
+    ]
+    edges = [
+        ConceptEdge(
+            edge_id=f"edge_{index}",
+            source_id=str(source),
+            target_id=str(target),
+            relation=ConceptRelation.CAUSES,
+            label="leads to",
+        )
+        for index, (source, target) in enumerate(
+            (pair for pair in ((source, target) for source in range(15) for target in range(15)) if pair[0] != pair[1])
+        )
+        if index < 30
+    ]
+    lesson = LessonPlan(
+        title="Oversized graph",
+        summary="A graph larger than a single visual shot.",
+        concept_graph=ConceptGraph(
+            objectives=["Explain the graph"],
+            nodes=nodes,
+            edges=edges,
+            teaching_sequence=[node.concept_id for node in nodes],
+        ),
+    )
+    registry = TemplateRegistry(builtin_templates())
+    pedagogy = PedagogyRouter().route(
+        lesson,
+        AudienceProfile(learning_goal="Understand the graph"),
+    )
+
+    program = TemplateCompiler().compile(
+        lesson,
+        [],
+        [
+            TemplateMatch(
+                template_id="cause_effect.v1",
+                concept_ids=["0", "1"],
+                score=1,
+                reason="Oversized graph regression",
+            )
+        ],
+        registry,
+        pedagogy,
+    )
+
+    assert program is not None
+    assert len(program.parameters["concepts"]) == 12
+    assert len(program.parameters["relations"]) <= 24
+    selected_ids = {
+        item["concept_id"] for item in program.parameters["concepts"]
+    }
+    assert {"0", "1"}.issubset(selected_ids)
+    assert all(
+        relation["source_id"] in selected_ids
+        and relation["target_id"] in selected_ids
+        for relation in program.parameters["relations"]
+    )

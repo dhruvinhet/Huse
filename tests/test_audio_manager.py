@@ -103,6 +103,7 @@ def test_edge_tts_is_mocked_and_metadata_is_returned(
     assert [scene.duration for scene in metadata.scenes] == [1.25, 2.0]
     assert metadata.scenes[1].start_time == 1.25
     assert metadata.scenes[1].end_time == 3.25
+    assert len(metadata.words) >= 6
     assert [call.args[0] for call in constructor.call_args_list] == [
         "First scene narration.",
         "Second scene narration.",
@@ -118,6 +119,82 @@ def test_edge_tts_is_mocked_and_metadata_is_returned(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["duration"] == 3.25
     assert len(manifest["scenes"]) == 2
+
+
+def test_word_boundary_event_spelling_is_normalized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Boundary events remain available across Edge-TTS event spellings."""
+
+    configure_audio_output(tmp_path, monkeypatch)
+    def make_communicator(_text: str, _voice: str) -> MagicMock:
+        communicator = MagicMock()
+        communicator.stream_sync.return_value = iter([
+            {"type": "audio", "data": b"mp3"},
+            {
+                "type": "word_boundary",
+                "text": "First",
+                "offset": 0,
+                "duration": 5_000_000,
+            },
+        ])
+        return communicator
+
+    monkeypatch.setattr(
+        audio_manager.edge_tts,
+        "Communicate",
+        MagicMock(side_effect=make_communicator),
+    )
+    monkeypatch.setattr(
+        audio_manager,
+        "MP3",
+        MagicMock(
+            return_value=SimpleNamespace(
+                info=SimpleNamespace(length=1.0, sample_rate=24000)
+            )
+        ),
+    )
+
+    metadata = AudioManager().generate(narrated_script())
+
+    assert metadata.words[0].text == "First"
+    assert metadata.words[0].start_time == 0
+
+
+def test_identical_narration_reuses_tts_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Visual-only reruns do not resynthesize unchanged narration text."""
+
+    configure_audio_output(tmp_path, monkeypatch)
+    constructor = MagicMock()
+
+    def make_communicator(text: str, _voice: str) -> MagicMock:
+        communicator = MagicMock()
+        communicator.save_sync.side_effect = (
+            lambda path: Path(path).write_bytes(text.encode("utf-8"))
+        )
+        return communicator
+
+    constructor.side_effect = make_communicator
+    monkeypatch.setattr(audio_manager.edge_tts, "Communicate", constructor)
+    monkeypatch.setattr(
+        audio_manager,
+        "MP3",
+        MagicMock(
+            return_value=SimpleNamespace(
+                info=SimpleNamespace(length=1.0, sample_rate=24000)
+            )
+        ),
+    )
+
+    manager = AudioManager()
+    manager.generate(narrated_script())
+    manager.generate(narrated_script())
+
+    assert constructor.call_count == 2
 
 
 def test_empty_script_narration_is_rejected(

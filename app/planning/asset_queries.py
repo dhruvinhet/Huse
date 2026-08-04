@@ -39,13 +39,35 @@ class SemanticAssetQueryPlanner:
                 *node.visual_affordances[:3],
                 node.definition,
             ]))
-            item.asset_query = AssetQuery(
+            query = AssetQuery(
                 concept=node.label,
                 asset_kind=AssetKind.LINE_ART,
                 style_id="whiteboard.default",
                 required_semantics=semantics,
             )
-            item.content["asset_slot"] = "left"
+            # Assets are explicit renderable children, not metadata attached
+            # to a card.  The renderer intentionally only paints a resolved
+            # asset for ``semantic_asset`` nodes, so this makes the asset part
+            # of the same lifecycle/layout as its concept card.
+            asset_id = f"{item.object_id}_asset"
+            if not any(child.object_id == asset_id for child in item.children):
+                item.content["layout"] = "horizontal"
+                item.children.append(
+                    VisualObjectSpec(
+                        object_id=asset_id,
+                        kind="semantic_asset",
+                        semantic_role="concept_illustration",
+                        concept_ids=[node.concept_id],
+                        content={
+                            "asset_slot": "left",
+                            "focal_weight": (
+                                0.9 if node.importance >= 0.75 else 0.6
+                            ),
+                        },
+                        asset_query=query,
+                        accessibility_label=f"{node.label} illustration",
+                    )
+                )
             item.content["focal_weight"] = (
                 0.9 if node.importance >= 0.75 else 0.6
             )

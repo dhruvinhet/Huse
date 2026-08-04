@@ -3,6 +3,8 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from pydantic import BaseModel
+
 import httpx
 import pytest
 
@@ -15,6 +17,12 @@ from app.services.gemini_client import (
     GeminiNetworkError,
     GeminiTimeoutError,
 )
+
+
+class StructuredResponse(BaseModel):
+    """Small schema used to verify Gemini-native structured output."""
+
+    answer: str
 
 
 @pytest.fixture
@@ -129,6 +137,32 @@ def test_generate_text_returns_stripped_response(
     assert request["model"] == gemini_client.settings.GEMINI_MODEL
     assert request["contents"] == "Test prompt"
     assert request["config"].temperature == pytest.approx(0.2)
+
+
+def test_gemini_can_enforce_a_provider_response_schema(
+    configured_settings: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Structured agents can pass their Pydantic model to Gemini natively."""
+
+    sdk_client = MagicMock()
+    sdk_client.models.generate_content.return_value = SimpleNamespace(
+        text='{"answer":"ok"}'
+    )
+    monkeypatch.setattr(
+        gemini_client.genai,
+        "Client",
+        MagicMock(return_value=sdk_client),
+    )
+
+    GeminiClient().generate_text(
+        "Return JSON.",
+        response_schema=StructuredResponse,
+    )
+
+    config = sdk_client.models.generate_content.call_args.kwargs["config"]
+    assert config.response_mime_type == "application/json"
+    assert config.response_schema is StructuredResponse
 
 
 
@@ -258,6 +292,39 @@ def test_nvidia_provider_uses_chat_completions(
         timeout=None,
     )
     response.raise_for_status.assert_called_once_with()
+
+
+def test_nvidia_provider_passes_native_json_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Structured agents use the endpoint's schema response format."""
+
+    test_settings = SimpleNamespace(
+        AI_PROVIDER="nvidia",
+        NVIDIA_API_KEY="nvidia-test-key",
+        NVIDIA_MODEL="meta/llama-3.3-70b-instruct",
+        NVIDIA_BASE_URL="https://example.test/v1",
+        NVIDIA_MAX_TOKENS=2048,
+    )
+    response = MagicMock()
+    response.json.return_value = {
+        "choices": [{"message": {"content": '{"answer":"ok"}'}}]
+    }
+    post = MagicMock(return_value=response)
+    monkeypatch.setattr(gemini_client, "settings", test_settings)
+    monkeypatch.setattr(gemini_client.httpx, "post", post)
+
+    GeminiClient().generate_text(
+        "Return JSON.",
+        response_schema=StructuredResponse,
+    )
+
+    payload = post.call_args.kwargs["json"]
+    assert payload["response_format"]["type"] == "json_schema"
+    assert payload["response_format"]["json_schema"]["strict"] is True
+    assert payload["response_format"]["json_schema"]["schema"]["required"] == [
+        "answer"
+    ]
 
 
 def test_nvidea_provider_alias_is_supported(

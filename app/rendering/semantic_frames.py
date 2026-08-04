@@ -300,11 +300,66 @@ class SemanticFrameRenderer:
                 events_by_object.setdefault(object_id, []).append(event)
         previous_ids = set(previous_state.object_states) if previous_state else set()
 
+        opening_leaf_id = next(
+            (
+                node.object_id
+                for node in ordered
+                if not node.children
+                and state.object_states[node.object_id].kind != "connector"
+                and state.object_states[node.object_id].lifecycle
+                not in {ObjectLifecycle.HIDDEN, ObjectLifecycle.REMOVED}
+            ),
+            None,
+        )
+
+        # A connector is meaningful only after both of its endpoint objects
+        # have entered the shot.  This is intentionally computed before the
+        # draw loop so it works even when a connector has no dedicated motion
+        # event of its own.
+        visible_now: set[str] = set()
+        for candidate in ordered:
+            candidate_state = state.object_states[candidate.object_id]
+            if candidate_state.lifecycle in {
+                ObjectLifecycle.HIDDEN,
+                ObjectLifecycle.REMOVED,
+            }:
+                continue
+            is_opening_leaf = (
+                previous_state is None
+                and candidate.object_id == opening_leaf_id
+            )
+            candidate_events = (
+                []
+                if is_opening_leaf
+                else events_by_object.get(candidate.object_id, [])
+            )
+            candidate_reveal = self._reveal_time(candidate_events)
+            if candidate_reveal is None or timestamp >= candidate_reveal:
+                visible_now.add(candidate.object_id)
+
         for node in ordered:
             object_state = state.object_states[node.object_id]
             if object_state.lifecycle in {ObjectLifecycle.HIDDEN, ObjectLifecycle.REMOVED}:
                 continue
-            object_events = events_by_object.get(node.object_id, [])
+            if object_state.kind == "connector":
+                source_id = object_state.content.get("source_id")
+                target_id = object_state.content.get("target_id")
+                if (
+                    not isinstance(source_id, str)
+                    or not isinstance(target_id, str)
+                    or source_id not in visible_now
+                    or target_id not in visible_now
+                ):
+                    continue
+            is_opening_leaf = (
+                previous_state is None
+                and node.object_id == opening_leaf_id
+            )
+            object_events = (
+                []
+                if is_opening_leaf
+                else events_by_object.get(node.object_id, [])
+            )
             event = self._event_at(object_events, timestamp)
             progress = self._event_progress(event, timestamp)
             is_new = node.object_id not in previous_ids
@@ -359,7 +414,17 @@ class SemanticFrameRenderer:
                     job,
                 )
             layer = cached.image
-            opacity = self._opacity(object_state, event, progress, is_new)
+            # Shot containers carry titles and composition context.  They
+            # must be present at the first frame; only their leaf objects
+            # should wait for a create/reveal event.
+            opacity = (
+                0.28 if object_state.lifecycle is ObjectLifecycle.DIMMED else 1.0
+            ) if object_state.child_ids else self._opacity(
+                object_state,
+                event,
+                progress,
+                is_new,
+            )
             reveal_box = (
                 LayoutBox(
                     x=cached.position[0],
@@ -371,15 +436,16 @@ class SemanticFrameRenderer:
                 else box
             )
             if event is not None and event.strategy in {
-                "handwriting", "write_left_to_right", "grow_edge",
+                "handwriting", "glyph_stroke", "svg_path_reveal",
+                "write_left_to_right", "grow_edge",
                 "stroke_reveal", "reveal_cell", "reveal_cell_by_cell",
                 "timeline_trace", "cycle_trace", "cause_effect_flow",
-                "trace_steps", "decision_flow", "sankey_flow",
+                "process_trace", "trace_steps", "decision_flow", "sankey_flow",
                 "split_reveal", "funnel_collapse", "overlap_reveal",
                 "layer_stack", "plot_trace", "matrix_cell_sequence",
                 "bond_trace", "signal_trace", "route_trace",
-                "cutaway_reveal", "derivation_stack",
-            } and progress < 1 and object_state.kind != "connector":
+                "cutaway_reveal", "derivation_stack", "stage_flow",
+            } and progress < 1 and object_state.kind != "connector" and not object_state.child_ids:
                 layer = self._semantic_reveal(
                     event.strategy,
                     layer.copy(),
@@ -471,24 +537,9 @@ class SemanticFrameRenderer:
                 draw_text=self._draw_centered_text,
             )
         )
-        if any(
-            asset.asset_id == f"asset_{state.object_id}"
-            and not asset.path.startswith("template://")
-            for asset in job.assets.assets
-        ):
-            icon_width = min(78.0, max(36.0, box.width * 0.22))
-            icon_height = min(78.0, max(36.0, box.height * 0.55))
-            self._draw_semantic_asset(
-                layer,
-                state,
-                LayoutBox(
-                    x=box.x + 12,
-                    y=box.y + (box.height - icon_height) / 2,
-                    width=icon_width,
-                    height=icon_height,
-                ),
-                job,
-            )
+        # Component cards remain typographic teaching blocks.  Resolved
+        # artwork is rendered only by an explicit semantic_asset node, where
+        # its intrinsic bounds and aspect ratio can be honored safely.
 
     def _draw_connector(
         self,
@@ -554,6 +605,90 @@ class SemanticFrameRenderer:
                 (tip[0] - 7, tip[1] - 7, tip[0] + 7, tip[1] + 7),
                 fill=self.ACCENT,
             )
+
+        label = str(state.content.get("label", "")).strip()
+        if label:
+            blocked_boxes = [
+                candidate
+                for object_id, candidate in boxes.items()
+                if object_id != state.object_id
+                and getattr(self, "_kind_by_object", {}).get(object_id) != "connector"
+            ]
+            self._draw_connector_label(draw, points, label, ink, blocked_boxes)
+
+    def _draw_connector_label(
+        self,
+        draw: ImageDraw.ImageDraw,
+        points: list[tuple[float, float]],
+        label: str,
+        ink: tuple[int, int, int, int],
+        blocked_boxes: list[LayoutBox],
+    ) -> None:
+        """Place a readable label on the routed connector, not on its parent."""
+
+        if len(points) < 2:
+            return
+        lengths = [
+            ((second[0] - first[0]) ** 2 + (second[1] - first[1]) ** 2) ** 0.5
+            for first, second in zip(points, points[1:])
+        ]
+        total = sum(lengths)
+        if total <= 0:
+            return
+        font = self._font(24)
+        bounds = draw.textbbox((0, 0), label, font=font)
+        text_width = bounds[2] - bounds[0]
+        text_height = bounds[3] - bounds[1]
+        padding_x, padding_y = 8, 5
+        candidates: list[tuple[float, float, int, int, int, int, float]] = []
+        for first, second, length in sorted(
+            zip(points, points[1:], lengths),
+            key=lambda item: item[2],
+            reverse=True,
+        ):
+            if length < text_width + 2 * padding_x:
+                continue
+            x = (first[0] + second[0]) / 2
+            y = (first[1] + second[1]) / 2
+            horizontal = abs(second[0] - first[0]) >= abs(second[1] - first[1])
+            offset = (text_height + 12) if horizontal else (text_width / 2 + 12)
+            for direction in (-1.0, 1.0):
+                label_x = x - text_width / 2 if horizontal else x + direction * offset
+                label_y = y + direction * offset if horizontal else y - text_height / 2
+                background = (
+                    round(label_x - padding_x),
+                    round(label_y - padding_y),
+                    round(label_x + text_width + padding_x),
+                    round(label_y + text_height + padding_y),
+                )
+                candidates.append((*background, label_x, label_y, length))
+        if not candidates:
+            return
+        selected = next(
+            (
+                candidate
+                for candidate in candidates
+                if not any(
+                    candidate[0] < box.x + box.width + 16
+                    and candidate[2] > box.x - 16
+                    and candidate[1] < box.y + box.height + 16
+                    and candidate[3] > box.y - 16
+                    for box in blocked_boxes
+                )
+            ),
+            None,
+        )
+        if selected is None:
+            return
+        left, top, right, bottom, label_x, label_y, _ = selected
+        background = (left, top, right, bottom)
+        draw.rounded_rectangle(background, radius=6, fill=(255, 255, 255, 235))
+        draw.text(
+            (round(label_x - bounds[0]), round(label_y - bounds[1])),
+            label,
+            font=font,
+            fill=ink,
+        )
 
     @staticmethod
     def _partial_polyline(
@@ -809,7 +944,40 @@ class SemanticFrameRenderer:
             end_time=1,
         )
         renderer = self._svg_renderer if is_svg else self._image_renderer
-        renderer.render(layer, renderable)
+        generated_asset = asset.path.replace("\\", "/").startswith(
+            "temp/v2/semantic_assets/"
+        )
+        # These generated files are full mini-diagrams rather than icons.
+        # Painting them into a small card slot produces clipped arrows,
+        # opaque black fragments, and tiny duplicate captions.  The card
+        # remains fully rendered and keeps its own readable label/detail;
+        # generated artwork is still available for dedicated semantic_asset
+        # objects where its full aspect ratio is respected.
+        if generated_asset and state.content.get("asset_slot") == "left":
+            return
+        if not generated_asset:
+            # Catalog SVGs are icons, not full-card illustrations.  Render
+            # them in a bounded centered square so their fallback stroke
+            # geometry cannot dominate the concept card.
+            icon_size = max(48, round(min(box.width, box.height) * 0.58))
+            renderable = renderable.model_copy(
+                update={
+                    "x": round(box.x + box.width / 2),
+                    "y": round(box.y + box.height / 2),
+                    "width": icon_size,
+                    "height": icon_size,
+                }
+            )
+        asset_layer = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+        renderer.render(asset_layer, renderable)
+
+        # Generated semantic illustrations are compact compositions (often
+        # three icons, arrows, and two captions), not single card icons.  In
+        # an asset_slot they must contribute only their artwork region; the
+        # card owns the label and detail typography.  Keeping the lower
+        # caption band would create tiny black marks and a second, unrelated
+        # label inside the card.  Offline icon assets retain their full box.
+        layer.alpha_composite(asset_layer)
 
     def _apply_camera(
         self,
@@ -828,19 +996,70 @@ class SemanticFrameRenderer:
             float(cue.parameters.get("source_bottom", canvas.height)),
         )
         if desired == (0.0, 0.0, float(canvas.width), float(canvas.height)):
-            desired = self._fallback_camera_rect(canvas, cue, progress)
-            left, top, right, bottom = desired
+            desired = self._geometry_camera_rect(canvas, cue)
+            if desired is None:
+                desired = self._fallback_camera_rect(canvas, cue, progress)
+            start = (0.0, 0.0, float(canvas.width), float(canvas.height))
         else:
-            full = (0.0, 0.0, float(canvas.width), float(canvas.height))
-            left = full[0] + (desired[0] - full[0]) * progress
-            top = full[1] + (desired[1] - full[1]) * progress
-            right = full[2] + (desired[2] - full[2]) * progress
-            bottom = full[3] + (desired[3] - full[3]) * progress
-            left, top, right, bottom = self._aspect_crop(
-                left, top, right, bottom, canvas.width, canvas.height
+            start = tuple(
+                float(cue.parameters.get(name, fallback))
+                for name, fallback in zip(
+                    (
+                        "source_start_left",
+                        "source_start_top",
+                        "source_start_right",
+                        "source_start_bottom",
+                    ),
+                    (0.0, 0.0, float(canvas.width), float(canvas.height)),
+                    strict=True,
+                )
             )
+        left = start[0] + (desired[0] - start[0]) * progress
+        top = start[1] + (desired[1] - start[1]) * progress
+        right = start[2] + (desired[2] - start[2]) * progress
+        bottom = start[3] + (desired[3] - start[3]) * progress
+        left, top, right, bottom = self._aspect_crop(
+            left, top, right, bottom, canvas.width, canvas.height
+        )
         crop = canvas.crop((round(left), round(top), round(right), round(bottom)))
         return crop.resize(canvas.size, Image.Resampling.LANCZOS)
+
+    @classmethod
+    def _geometry_camera_rect(
+        cls,
+        canvas: Image.Image,
+        cue: CameraCue,
+    ) -> tuple[float, float, float, float] | None:
+        """Frame the planned target while retaining every target edge."""
+
+        parameters = cue.parameters
+        values = [
+            parameters.get(name)
+            for name in ("target_x", "target_y", "target_width", "target_height")
+        ]
+        if not all(isinstance(value, (int, float)) for value in values):
+            return None
+        target_x, target_y, target_width, target_height = (
+            float(value) for value in values
+        )
+        if target_width <= 0 or target_height <= 0:
+            return None
+        configured_margin = parameters.get("safe_margin", 0.08)
+        safe_margin = (
+            float(configured_margin)
+            if isinstance(configured_margin, (int, float))
+            else 0.08
+        )
+        padding_x = max(48.0, target_width * max(0.04, safe_margin))
+        padding_y = max(48.0, target_height * max(0.04, safe_margin))
+        return cls._aspect_crop(
+            target_x - padding_x,
+            target_y - padding_y,
+            target_x + target_width + padding_x,
+            target_y + target_height + padding_y,
+            canvas.width,
+            canvas.height,
+        )
 
     @staticmethod
     def _fallback_camera_rect(
@@ -1503,6 +1722,10 @@ class SemanticFrameRenderer:
     ) -> Image.Image:
         """Apply an operator-specific reveal adapter to a cached layer."""
 
+        if strategy in {"svg_path_reveal", "stroke_reveal"}:
+            return cls._path_reveal(layer, position, box, progress)
+        if strategy in {"glyph_stroke", "handwriting", "write_left_to_right"}:
+            return cls._glyph_reveal(layer, position, box, progress)
         if strategy in {"layer_stack", "funnel_collapse", "cutaway_reveal"}:
             return cls._vertical_reveal(layer, position, box, progress)
         if strategy in {"cycle_trace", "bond_trace", "overlap_reveal"}:
@@ -1511,9 +1734,210 @@ class SemanticFrameRenderer:
             return cls._grid_reveal(layer, position, box, progress)
         if strategy in {"trace_steps", "derivation_stack"}:
             return cls._row_reveal(layer, position, box, progress)
-        if strategy in {"decision_flow", "morph_state"}:
+        if strategy in {"timeline_trace", "process_trace", "sankey_flow", "stage_flow"}:
+            return cls._flow_path_reveal(layer, position, box, progress)
+        if strategy in {"signal_trace", "route_trace"}:
+            return cls._rail_reveal(layer, position, box, progress)
+        if strategy == "plot_trace":
+            return cls._plot_reveal(layer, position, box, progress)
+        if strategy == "morph_state":
+            return cls._morph_reveal(layer, progress)
+        if strategy == "decision_flow":
             return cls._diagonal_reveal(layer, position, box, progress)
+        if strategy == "group_focus":
+            return cls._group_reveal(layer, position, box, progress)
         return cls._horizontal_reveal(layer, position, box, progress)
+
+    @staticmethod
+    def _group_reveal(
+        layer: Image.Image,
+        position: tuple[int, int],
+        box: LayoutBox,
+        progress: float,
+    ) -> Image.Image:
+        """Reveal a composition from its focal center to its members."""
+
+        if progress >= 1.0:
+            return layer
+        mask = Image.new("L", layer.size, 0)
+        draw = ImageDraw.Draw(mask)
+        left = box.x - position[0]
+        top = box.y - position[1]
+        width = max(1.0, box.width)
+        height = max(1.0, box.height)
+        cx = left + width * 0.5
+        cy = top + height * 0.5
+        radius = max(width, height) * (0.12 + 0.72 * progress)
+        draw.ellipse(
+            (cx - radius, cy - radius, cx + radius, cy + radius),
+            fill=255,
+        )
+        alpha = Image.composite(
+            layer.getchannel("A"),
+            Image.new("L", layer.size, 0),
+            mask,
+        )
+        layer.putalpha(alpha)
+        return layer
+
+    @staticmethod
+    def _path_reveal(
+        layer: Image.Image,
+        position: tuple[int, int],
+        box: LayoutBox,
+        progress: float,
+    ) -> Image.Image:
+        """Reveal line-art assets along a growing center-out stroke path."""
+
+        if progress >= 1.0:
+            return layer
+        mask = Image.new("L", layer.size, 0)
+        draw = ImageDraw.Draw(mask)
+        left = box.x - position[0]
+        top = box.y - position[1]
+        width = max(1.0, box.width)
+        height = max(1.0, box.height)
+        points = [
+            (left + width * 0.08, top + height * 0.78),
+            (left + width * 0.34, top + height * 0.26),
+            (left + width * 0.60, top + height * 0.70),
+            (left + width * 0.92, top + height * 0.20),
+        ]
+        visible = max(2, round((len(points) - 1) * progress) + 1)
+        draw.line(points[:visible], fill=255, width=max(12, round(min(width, height) * 0.16)), joint="curve")
+        for point in points[:visible]:
+            radius = max(8, round(min(width, height) * 0.09))
+            draw.ellipse((point[0] - radius, point[1] - radius, point[0] + radius, point[1] + radius), fill=255)
+        layer.putalpha(Image.composite(layer.getchannel("A"), Image.new("L", layer.size, 0), mask))
+        return layer
+
+    @staticmethod
+    def _glyph_reveal(
+        layer: Image.Image,
+        position: tuple[int, int],
+        box: LayoutBox,
+        progress: float,
+    ) -> Image.Image:
+        """Reveal text in alternating glyph-width columns, like handwriting."""
+
+        if progress >= 1.0:
+            return layer
+        mask = Image.new("L", layer.size, 0)
+        draw = ImageDraw.Draw(mask)
+        left = box.x - position[0]
+        top = box.y - position[1]
+        width = max(1.0, box.width)
+        height = max(1.0, box.height)
+        columns = max(4, min(18, round(width / 24)))
+        visible = max(1, round(columns * progress))
+        for index in range(visible):
+            column = index * width / columns
+            draw.rectangle((left + column, top, left + column + width / columns + 3, top + height), fill=255)
+        layer.putalpha(Image.composite(layer.getchannel("A"), Image.new("L", layer.size, 0), mask))
+        return layer
+
+    @staticmethod
+    def _flow_path_reveal(
+        layer: Image.Image,
+        position: tuple[int, int],
+        box: LayoutBox,
+        progress: float,
+    ) -> Image.Image:
+        """Reveal process/timeline graphics along a directional zig-zag path."""
+
+        if progress >= 1.0:
+            return layer
+        mask = Image.new("L", layer.size, 0)
+        draw = ImageDraw.Draw(mask)
+        left = box.x - position[0]
+        top = box.y - position[1]
+        width = max(1.0, box.width)
+        height = max(1.0, box.height)
+        points = [
+            (left + width * 0.05, top + height * 0.72),
+            (left + width * 0.30, top + height * 0.72),
+            (left + width * 0.45, top + height * 0.34),
+            (left + width * 0.70, top + height * 0.34),
+            (left + width * 0.92, top + height * 0.56),
+        ]
+        visible = max(2, round(1 + (len(points) - 1) * progress))
+        draw.line(points[:visible], fill=255, width=max(10, round(min(width, height) * 0.12)), joint="curve")
+        for point in points[:visible]:
+            radius = max(6, round(min(width, height) * 0.07))
+            draw.ellipse((point[0] - radius, point[1] - radius, point[0] + radius, point[1] + radius), fill=255)
+        layer.putalpha(Image.composite(layer.getchannel("A"), Image.new("L", layer.size, 0), mask))
+        return layer
+
+    @staticmethod
+    def _rail_reveal(
+        layer: Image.Image,
+        position: tuple[int, int],
+        box: LayoutBox,
+        progress: float,
+    ) -> Image.Image:
+        """Reveal circuits/routes as a moving signal across a rail."""
+
+        if progress >= 1.0:
+            return layer
+        mask = Image.new("L", layer.size, 0)
+        draw = ImageDraw.Draw(mask)
+        left = box.x - position[0]
+        top = box.y - position[1]
+        width = max(1.0, box.width)
+        height = max(1.0, box.height)
+        y = top + height * 0.55
+        end = left + width * progress
+        draw.line((left, y, end, y), fill=255, width=max(8, round(min(width, height) * 0.10)))
+        radius = max(8, round(min(width, height) * 0.12))
+        draw.ellipse((end - radius, y - radius, end + radius, y + radius), fill=255)
+        layer.putalpha(Image.composite(layer.getchannel("A"), Image.new("L", layer.size, 0), mask))
+        return layer
+
+    @staticmethod
+    def _plot_reveal(
+        layer: Image.Image,
+        position: tuple[int, int],
+        box: LayoutBox,
+        progress: float,
+    ) -> Image.Image:
+        """Reveal a chart trace from its baseline toward the latest point."""
+
+        if progress >= 1.0:
+            return layer
+        mask = Image.new("L", layer.size, 0)
+        draw = ImageDraw.Draw(mask)
+        left = box.x - position[0]
+        top = box.y - position[1]
+        width = max(1.0, box.width)
+        height = max(1.0, box.height)
+        points = [
+            (left + width * 0.08, top + height * 0.72),
+            (left + width * 0.30, top + height * 0.48),
+            (left + width * 0.52, top + height * 0.62),
+            (left + width * 0.74, top + height * 0.30),
+            (left + width * 0.92, top + height * 0.42),
+        ]
+        visible = max(2, round(1 + (len(points) - 1) * progress))
+        draw.line(points[:visible], fill=255, width=max(8, round(min(width, height) * 0.09)), joint="curve")
+        layer.putalpha(Image.composite(layer.getchannel("A"), Image.new("L", layer.size, 0), mask))
+        return layer
+
+    @staticmethod
+    def _morph_reveal(layer: Image.Image, progress: float) -> Image.Image:
+        """Grow a semantic object from a compact state into its final form."""
+
+        if progress >= 1.0:
+            return layer
+        scale = 0.68 + 0.32 * max(0.0, min(1.0, progress))
+        width = max(1, round(layer.width * scale))
+        height = max(1, round(layer.height * scale))
+        resized = layer.resize((width, height), Image.Resampling.LANCZOS)
+        result = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+        result.alpha_composite(
+            resized,
+            dest=(max(0, (layer.width - width) // 2), max(0, (layer.height - height) // 2)),
+        )
+        return result
 
     @staticmethod
     def _radial_reveal(

@@ -1,9 +1,11 @@
 """End-to-end semantic V2 educational whiteboard pipeline."""
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from inspect import signature
 from pathlib import Path
 import re
+import json
 from time import perf_counter
 from typing import TypeVar, cast
 
@@ -200,6 +202,7 @@ class V2PipelineRunner:
         )
         self._last_artifact_id = None
         started = perf_counter()
+        narration_cache: dict[str, NarrationPlan] = {}
         error: Exception | None = None
         status = "failed"
         try:
@@ -217,25 +220,40 @@ class V2PipelineRunner:
                 lambda: normalize_lesson_structure(lesson),
             )
             self._record("v2/lesson.json", lesson)
-            pedagogy = self._stage(
-                "Route Pedagogy",
-                lambda: self._pedagogy.route(lesson, request.audience),
-            )
+            # These three planning products all depend only on the validated
+            # lesson and audience.  Keep their contracts separate, but fan
+            # them out so the lesson -> pedagogy -> storyboard path no longer
+            # pays three avoidable deterministic round trips before the next
+            # provider stage can begin.
+            with ThreadPoolExecutor(
+                max_workers=3,
+                thread_name_prefix="v2-pre-storyboard",
+            ) as executor:
+                pedagogy_future = executor.submit(
+                    self._stage,
+                    "Route Pedagogy",
+                    lambda: self._pedagogy.route(lesson, request.audience),
+                )
+                strategies_future = executor.submit(
+                    self._stage,
+                    "Select Visual Strategies",
+                    lambda: self._knowledge.strategies_for(
+                        lesson.concept_graph,
+                        request.audience,
+                    ),
+                )
+                template_matches_future = executor.submit(
+                    self._stage,
+                    "Match Templates",
+                    lambda: self._match_templates(
+                        lesson,
+                        request.audience,
+                    ),
+                )
+                pedagogy = pedagogy_future.result()
+                strategies = strategies_future.result()
+                template_matches = template_matches_future.result()
             self._record("v2/pedagogy.json", pedagogy)
-            strategies = self._stage(
-                "Select Visual Strategies",
-                lambda: self._knowledge.strategies_for(
-                    lesson.concept_graph,
-                    request.audience,
-                ),
-            )
-            template_matches = self._stage(
-                "Match Templates",
-                lambda: self._match_templates(
-                    lesson,
-                    request.audience,
-                ),
-            )
             self._debug.write_json(
                 "v2/strategy.json",
                 {
@@ -357,17 +375,48 @@ class V2PipelineRunner:
                     continue
                 self._record("v2/storyboard/accepted.json", storyboard)
 
-                narration = self._stage(
-                    "Write Narration",
-                    lambda: self._write_narration_with_fallback(
-                        storyboard,
-                        request.audience,
-                        pedagogy,
-                        request.target_duration,
-                    ),
-                )
+                narration_key = self._narration_cache_key(storyboard)
+                # Narration and asset resolution depend on the accepted
+                # storyboard but not on one another.  Run them together so a
+                # visual-only repair does not wait behind another model call.
+                with ThreadPoolExecutor(
+                    max_workers=2,
+                    thread_name_prefix="v2-post-storyboard",
+                ) as executor:
+                    narration_future = None
+                    if narration_key in narration_cache:
+                        narration = narration_cache[narration_key].model_copy(
+                            deep=True
+                        )
+                        logger.info(
+                            "Reusing narration for unchanged storyboard (attempt={}).",
+                            attempt,
+                        )
+                    else:
+                        narration_future = executor.submit(
+                            self._stage,
+                            "Write Narration",
+                            lambda: self._write_narration_with_fallback(
+                                storyboard,
+                                request.audience,
+                                pedagogy,
+                                request.target_duration,
+                            ),
+                        )
+                    assets_future = executor.submit(
+                        self._stage,
+                        "Resolve Semantic Assets",
+                        lambda: self._assets.resolve(storyboard),
+                    )
+                    if narration_future is not None:
+                        narration = narration_future.result()
+                        narration_cache[narration_key] = narration.model_copy(
+                            deep=True
+                        )
+                    assets = assets_future.result()
                 self._validate_narration(storyboard, narration)
                 self._record("v2/narration.json", narration)
+                self._record("v2/assets.json", assets)
                 audio = self._stage(
                     "Generate Narration",
                     lambda: self._speech.synthesize(narration, request.voice),
@@ -377,11 +426,6 @@ class V2PipelineRunner:
                     lambda: self._aligner.align(narration, audio),
                 )
                 self._record("v2/audio_alignment.json", alignment)
-                assets = self._stage(
-                    "Resolve Semantic Assets",
-                    lambda: self._assets.resolve(storyboard),
-                )
-                self._record("v2/assets.json", assets)
                 document = self._stage(
                     "Build Persistent States",
                     lambda: self._state.materialize(storyboard),
@@ -570,6 +614,18 @@ class V2PipelineRunner:
             raise QualityGateError(
                 f"quality gate failed: {[item.code for item in report.findings]}"
             )
+        repair_targets = {
+            item.repair_target
+            for item in report.findings
+            if item.repair_target
+        }
+        if repair_targets and repair_targets.isdisjoint({"storyboard"}):
+            logger.info(
+                "Quality findings target deterministic stages {}; keeping the "
+                "accepted storyboard and recomputing those stages.",
+                sorted(repair_targets),
+            )
+            return storyboard
         if storyboard.document_id.startswith("compiled_"):
             logger.warning(
                 "Authoritative template failed quality checks; replacing it "
@@ -861,6 +917,22 @@ class V2PipelineRunner:
         )
         expected = target_duration * 2.30
         return words >= expected
+
+    @staticmethod
+    def _narration_cache_key(storyboard: Storyboard) -> str:
+        """Key narration reuse to spoken content, not low-level geometry."""
+
+        payload = [
+            {
+                "beat_id": beat.beat_id,
+                "concept_ids": beat.concept_ids,
+                "teaching_intent": beat.teaching_intent,
+                "phrase_intent": beat.phrase_intent,
+                "purpose": beat.purpose,
+            }
+            for beat in storyboard.beats
+        ]
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
     def _plan_storyboard_with_pedagogy(
         self,

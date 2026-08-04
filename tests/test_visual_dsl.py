@@ -1,10 +1,18 @@
 """Regression coverage for bounded VisualDSL operators and asset-aware layout."""
 
+from PIL import Image, ImageDraw
+
 from app.domain.assets import AssetSource, ResolvedAssetSet, ResolvedSemanticAsset
 from app.domain.layout import Viewport
+from app.domain.layout import LayoutBox
 from app.domain.visual_document import ObjectLifecycle, ObjectState, VisualDocument, VisualState
 from app.domain.visual_intent import RendererOperator
 from app.layout import HierarchicalLayoutEngine
+from app.rendering.operator_plugins import (
+    OperatorDrawingContext,
+    OperatorRendererRegistry,
+)
+from app.rendering.semantic_frames import SemanticFrameRenderer
 from app.templates.operator_templates import (
     GenericOperatorParameters,
     SemanticOperatorCompiler,
@@ -121,8 +129,8 @@ def test_layout_uses_resolved_asset_aspect_ratio_and_focal_weight() -> None:
     assert wide.box.height >= square.box.height
 
 
-def test_directed_educational_templates_route_to_bounded_flow_dsl() -> None:
-    """Cause/effect and process matches do not regress to generic card trees."""
+def test_directed_educational_templates_keep_semantic_operator_identity() -> None:
+    """Cause/effect keeps its operator while using bounded flow structure."""
 
     template = operator_template(
         "cause_effect.v1",
@@ -161,8 +169,8 @@ def test_directed_educational_templates_route_to_bounded_flow_dsl() -> None:
             ],
         }
     )
-    assert compiled.kind == "flow"
-    assert compiled.content["operator"] == "flow"
+    assert compiled.kind == "pipeline"
+    assert compiled.content["operator"] == "cause_effect"
 
 
 def test_every_builtin_family_has_a_bounded_operator_root() -> None:
@@ -277,3 +285,70 @@ def test_typed_relations_survive_cause_effect_compilation() -> None:
         (item.concept_ids[0], item.concept_ids[1], item.content["relation"])
         for item in connectors
     } == {("c1", "c3", "causes"), ("c2", "c3", "flows_to")}
+
+
+def test_all_declared_operators_have_explicit_pixel_plugins() -> None:
+    """Operator families are rendered through explicit branches, not fallback cards."""
+
+    registry = OperatorRendererRegistry()
+    assert all(
+        registry.supports_operator(operator.value)
+        for operator in RendererOperator
+    )
+
+    def draw_text(draw, bounds, text, size, fill):
+        del bounds, size
+        draw.text((8, 8), str(text), fill=fill)
+
+    for operator in RendererOperator:
+        image = Image.new("RGBA", (360, 240), (255, 255, 255, 0))
+        state = ObjectState(
+            object_id=f"{operator.value}_root",
+            kind="pipeline",
+            content={"operator": operator.value, "label": operator.value},
+            child_ids=[],
+        )
+        context = OperatorDrawingContext(
+            image=image,
+            draw=ImageDraw.Draw(image),
+            state=state,
+            box=LayoutBox(x=0, y=0, width=360, height=240),
+            boxes={},
+            coordinates=(0, 0, 360, 240),
+            ink=(20, 20, 20, 255),
+            fill=(255, 255, 255, 255),
+            accent=(40, 100, 210, 255),
+            highlight=(255, 220, 80, 255),
+            stroke_width=3,
+            font_size=18,
+            label=operator.value,
+            draw_text=draw_text,
+        )
+        registry.draw(context)
+        assert image.getbbox() is not None, operator.value
+
+
+def test_semantic_animation_adapters_are_not_one_shared_mask() -> None:
+    """Distinct operator strategies produce distinct intermediate reveals."""
+
+    layer = Image.new("RGBA", (180, 120), (20, 40, 80, 255))
+    box = LayoutBox(x=0, y=0, width=180, height=120)
+    strategies = (
+        "svg_path_reveal",
+        "glyph_stroke",
+        "sankey_flow",
+        "signal_trace",
+        "plot_trace",
+        "morph_state",
+    )
+    signatures = {
+        strategy: SemanticFrameRenderer._semantic_reveal(
+            strategy,
+            layer.copy(),
+            (0, 0),
+            box,
+            0.45,
+        ).getchannel("A").tobytes()
+        for strategy in strategies
+    }
+    assert len(set(signatures.values())) >= 5

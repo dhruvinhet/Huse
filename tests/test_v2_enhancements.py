@@ -138,6 +138,26 @@ def test_camera_choreography_uses_beat_purpose() -> None:
     assert plan.cues[1].parameters["purpose"] == "emphasize"
 
 
+def test_camera_focus_recovers_visible_content_from_connector_only_attention() -> None:
+    """Connector-only attention must not create a close-up of connector glyphs."""
+
+    geometry = {
+        "state_root": LayoutBox(x=0, y=0, width=1920, height=1080),
+        "lesson_scene": LayoutBox(x=100, y=420, width=1720, height=240),
+        "scene_connector_000": LayoutBox(x=900, y=520, width=120, height=24),
+        "scene_connector_001": LayoutBox(x=900, y=520, width=120, height=24),
+        "scene_evidence": LayoutBox(x=1200, y=430, width=420, height=180),
+    }
+
+    targets = SemanticCameraPlanner._focus_targets(
+        ["scene_connector_000", "scene_connector_001"],
+        geometry,
+        viewport_width=1920,
+    )
+
+    assert targets == ["scene_evidence"]
+
+
 def test_connector_path_reveal_follows_route_distance() -> None:
     """A drawing animation reveals a routed path by distance, not a box mask."""
 

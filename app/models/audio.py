@@ -1,7 +1,7 @@
 """Metadata models for generated narration and scene-level timing."""
 
 from math import isclose
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -56,6 +56,7 @@ class AudioMetadata(BaseModel):
     duration: float = Field(gt=0)
     sample_rate: int = Field(gt=0)
     voice: NonEmptyString
+    word_timing_source: Literal["provider", "estimated", "mixed"] = "provider"
     scenes: list[SceneAudio] = Field(default_factory=list)
     words: list[AudioWordTiming] = Field(default_factory=list)
 

@@ -83,11 +83,19 @@ class HierarchicalLayoutEngine:
         synthetic = self._stack_roots(state.state_id, measured)
         available_width = viewport.width - 2 * viewport.margin
         available_height = viewport.height - 2 * viewport.margin
-        scale = min(
-            1.0,
+        # Use the available viewport when the semantic diagram is smaller
+        # than the canvas.  The previous upper bound of 1.0 preserved tiny
+        # intrinsic boxes, which made otherwise valid template states occupy
+        # 10-15% of the teaching frame and forced the camera to compensate for
+        # a layout problem.  This remains aspect-correct and never exceeds the
+        # fit scale, so large diagrams are still reduced rather than clipped.
+        fit_scale = min(
             available_width / max(1.0, synthetic.width),
             available_height / max(1.0, synthetic.height),
         )
+        # Cap enlargement so intrinsic aspect-ratio differences remain
+        # observable and a tiny one-dimensional rail cannot become enormous.
+        scale = min(1.75, fit_scale)
         offset_x = viewport.margin + (available_width - synthetic.width * scale) / 2
         offset_y = viewport.margin + (available_height - synthetic.height * scale) / 2
         return self._materialize(
@@ -141,7 +149,23 @@ class HierarchicalLayoutEngine:
             width, height = self._layout_funnel(content_children, gap)
         elif operator in {"flow", "process", "cause_effect", "transform"} or layout == "sankey":
             width, height = self._layout_sankey(content_children, gap)
-        elif operator in {"layered", "group", "spatial"} or layout == "layered":
+        # A generic group is still allowed to declare its composition axis.
+        # Treating every group as a layered stack made horizontal summary
+        # diagrams collapse into a tall, narrow rail and left the camera with
+        # no useful geometry to frame.  Keep layered/spatial operators on the
+        # specialized solver, while honoring an explicit group layout hint.
+        elif operator == "group" and layout in {"horizontal", "vertical"}:
+            # Long horizontal groups become unreadable rails. Keep short
+            # groups on their requested axis, but distribute larger concept
+            # sets into a deterministic grid so the teaching frame has a
+            # useful occupied area and each card remains readable.
+            if layout == "horizontal" and len(content_children) > 5:
+                width, height = self._layout_grid(content_children, gap)
+            else:
+                width, height = self._layout_linear(
+                    content_children, horizontal=layout == "horizontal", gap=gap
+                )
+        elif operator in {"layered", "spatial"} or layout == "layered":
             width, height = self._layout_layered(content_children, gap)
         elif operator == "callout" or layout == "callout":
             width, height = self._layout_callout(content_children, gap)

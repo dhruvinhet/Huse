@@ -12,6 +12,10 @@ class UnsupportedSemanticKindError(RuntimeError):
     """Raised when no explicit pixel implementation exists."""
 
 
+class UnsupportedSemanticOperatorError(RuntimeError):
+    """Raised when a declared operator has no pixel implementation."""
+
+
 @dataclass(slots=True)
 class OperatorDrawingContext:
     """Provide shared vector primitives to one explicit renderer plugin."""
@@ -85,7 +89,12 @@ class CardPlugin(_Plugin):
     def draw(self, context: OperatorDrawingContext) -> None:
         box = context.coordinates
         draw = context.draw
-        asset_slot = context.state.content.get("asset_slot") == "left"
+        # Card typography owns the full card width.  Resolved SVGs may be
+        # full mini-diagrams or renderer-dependent glyphs; painting them into
+        # a small left slot caused clipped black fragments and reduced text
+        # readability.  Dedicated semantic_asset objects render artwork at
+        # their own measured aspect ratio instead.
+        asset_slot = False
         text_left = (
             box[0] + min(96, max(58, round((box[2] - box[0]) * 0.26)))
             if asset_slot
@@ -287,58 +296,34 @@ class SemanticOperatorPlugin(_Plugin):
         elif operator == "graph":
             ContainerPlugin("graph").draw(context)
         elif operator == "binary_search":
-            draw.line((left, bottom - 34, right, bottom - 34), fill=context.ink, width=3)
-            count = max(1, len([item for item in context.state.child_ids if item in context.boxes]))
-            for name, color in (("low", context.accent), ("mid", context.ink), ("high", context.accent)):
-                index = int(context.state.content.get(name, 0))
-                x = left + round((index + 0.5) * width / count)
-                draw.polygon([(x, bottom - 12), (x - 8, bottom - 24), (x + 8, bottom - 24)], fill=color)
-                draw.text((x - 12, bottom - 11), name, fill=color)
-            code = str(context.state.content.get("active_code_line", ""))
-            if code:
-                context.draw_text(draw, (left + 12, top + 36, right - 12, top + 72), code, 18, context.ink)
+            self._draw_binary_search(context)
         elif operator == "sorting":
-            pivot = int(context.state.content.get("pivot_index", 0))
-            x = left + round((pivot + 0.5) * width / max(1, len(context.state.child_ids)))
-            draw.polygon([(x, top + 30), (x - 10, top + 12), (x + 10, top + 12)], fill=context.accent)
-            draw.text((x + 12, top + 10), "pivot", fill=context.accent)
+            self._draw_sorting(context)
         elif operator in {"graph_traversal", "system"}:
-            ContainerPlugin("graph").draw(context)
-            status = "frontier: " + ", ".join(map(str, context.state.content.get("frontier", [])))
-            draw.text((left + 14, bottom - 24), status, fill=context.accent)
+            self._draw_graph_traversal(context)
         elif operator == "neural_network":
-            for index in range(5):
-                x = left + 24 + index * max(24, (width - 48) // 5)
-                for row in range(3):
-                    y = top + 50 + row * max(20, (height - 90) // 3)
-                    draw.ellipse((x - 6, y - 6, x + 6, y + 6), outline=context.accent, width=2)
+            self._draw_neural_network(context)
         elif operator in {"protocol", "scheduling"}:
-            ContainerPlugin("protocol").draw(context)
-            participants = context.state.content.get("participants", [])
-            for index, participant in enumerate(participants if isinstance(participants, list) else []):
-                x = left + (index + 1) * width // (len(participants) + 1)
-                draw.line((x, top + 44, x, bottom - 16), fill=context.accent, width=2)
-                draw.text((x - 22, top + 24), str(participant), fill=context.ink)
+            self._draw_protocol(context)
         elif operator in {"tree_index"}:
-            ContainerPlugin("tree").draw(context)
+            self._draw_tree_index(context)
         elif operator in {"memory_map", "hash_map"}:
-            ContainerPlugin("array").draw(context)
-            draw.text((left + 12, top + 36), f"{operator.replace('_', ' ')} state", fill=context.accent)
+            self._draw_memory_map(context)
         elif operator == "blockchain":
             ContainerPlugin("blockchain").draw(context)
         elif operator in {"comparison"}:
-            ContainerPlugin("table").draw(context)
+            self._draw_comparison(context)
         elif operator == "timeline":
-            ContainerPlugin("timeline").draw(context)
+            self._draw_timeline(context)
         elif operator == "cycle":
             draw.ellipse((left + 30, top + 32, right - 30, bottom - 24), outline=context.accent, width=5)
             draw.polygon([(right - 32, top + height // 2), (right - 50, top + height // 2 - 10), (right - 50, top + height // 2 + 10)], fill=context.accent)
         elif operator in {"cause_effect", "process"}:
-            ContainerPlugin("cause_effect").draw(context)
+            self._draw_cause_effect(context)
         elif operator in {"layered", "spatial"}:
-            ContainerPlugin("layered").draw(context)
+            self._draw_layered(context)
         elif operator == "flowchart":
-            ContainerPlugin("flowchart").draw(context)
+            self._draw_flowchart(context)
         elif operator == "funnel":
             for index in range(3):
                 inset = 14 + index * 22
@@ -348,16 +333,18 @@ class SemanticOperatorPlugin(_Plugin):
             draw.ellipse((left + width // 6, top + 42, left + 2 * width // 3, bottom - 16), outline=context.accent, width=4)
             draw.ellipse((left + width // 3, top + 42, right - width // 6, bottom - 16), outline=context.ink, width=4)
         elif operator in {"bar_chart", "line_chart", "simulation"}:
-            ContainerPlugin("axes").draw(context)
-            if operator == "line_chart":
-                points = [(left + 38 + index * max(20, (width - 70) // 3), bottom - 40 - round((0.25 + index * 0.2) * height)) for index in range(4)]
-                draw.line(points, fill=context.accent, width=4)
+            self._draw_chart(context)
         elif operator == "callout":
             TextPlugin().draw(context)
         elif operator == "group":
             ContainerPlugin("layered").draw(context)
         elif operator in {"plot", "table", "matrix"}:
-            ContainerPlugin("axes" if operator == "plot" else "table").draw(context)
+            if operator == "plot":
+                self._draw_plot(context)
+            elif operator == "matrix":
+                self._draw_matrix(context)
+            else:
+                self._draw_comparison(context)
         elif operator == "flow":
             self._draw_flow(context)
         elif operator == "molecule":
@@ -378,13 +365,9 @@ class SemanticOperatorPlugin(_Plugin):
                 width=5,
             )
         elif operator in {"equation", "proof_derivation"}:
-            ContainerPlugin("document").draw(context)
-            draw.text((left + 48, top + 52), "given  →  substitute  →  result", fill=context.accent)
+            self._draw_equation(context)
         elif operator in {"code_trace"}:
-            ContainerPlugin("document").draw(context)
-            for index in range(4):
-                y = top + 48 + index * 22
-                draw.text((left + 46, y), f"{index + 1:>2}  state[{index}]", fill=context.ink if index else context.accent)
+            self._draw_code_trace(context)
         elif operator == "semantic_structure":
             draw.rounded_rectangle(
                 (left, top + 48, right, bottom),
@@ -403,14 +386,307 @@ class SemanticOperatorPlugin(_Plugin):
                 if legend:
                     draw.text((left + 16, bottom - 24), legend, fill=context.accent)
         else:
-            ContainerPlugin("layered").draw(context)
+            raise UnsupportedSemanticOperatorError(
+                f"no renderer plugin for semantic operator {operator!r}"
+            )
         if context.label:
             context.draw_text(draw, (left + 8, top + 2, right - 8, min(bottom, top + 42)), context.label, context.font_size, context.ink)
+
+    @staticmethod
+    def _child_boxes(context: OperatorDrawingContext) -> list[LayoutBox]:
+        """Return visible child geometry in declared order."""
+
+        return [
+            context.boxes[item_id]
+            for item_id in context.state.child_ids
+            if item_id in context.boxes
+            and context.boxes[item_id].width > 8
+            and context.boxes[item_id].height > 8
+        ]
+
+    @classmethod
+    def _draw_binary_search(cls, context: OperatorDrawingContext) -> None:
+        """Draw search bounds, midpoint, eliminated ranges, and code."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        children = cls._child_boxes(context)
+        count = len(children)
+        baseline = bottom - 34
+        draw.line((left + 12, baseline, right - 12, baseline), fill=context.ink, width=3)
+        if not children:
+            draw.text((left + 14, top + 36), "low  ->  mid  ->  high", fill=context.accent)
+            return
+        low = int(context.state.content.get("low", 0))
+        high = int(context.state.content.get("high", count - 1) or count - 1)
+        mid = int(context.state.content.get("mid", (low + high) // 2) or 0)
+        high = min(count - 1, max(low, high))
+        for index, child in enumerate(children):
+            center = round(child.x + child.width / 2)
+            if index < low or index > high:
+                draw.line((center - 16, baseline - 20, center + 16, baseline - 2), fill=context.muted if hasattr(context, "muted") else context.ink, width=3)
+            if index == mid:
+                draw.polygon([(center, baseline - 30), (center - 9, baseline - 16), (center + 9, baseline - 16)], fill=context.accent)
+        draw.text((left + 14, top + 36), f"low={low}  mid={mid}  high={high}", fill=context.accent)
+        code = str(context.state.content.get("active_code_line", "")).strip()
+        if code:
+            context.draw_text(draw, (left + 14, bottom - 28, right - 14, bottom - 2), code, 16, context.ink)
+
+    @classmethod
+    def _draw_sorting(cls, context: OperatorDrawingContext) -> None:
+        """Draw a sorting partition with active-range brackets and pivot."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        children = cls._child_boxes(context)
+        if not children:
+            return
+        pivot = max(0, min(len(children) - 1, int(context.state.content.get("pivot_index", 0))))
+        active = context.state.content.get("active_range", [0, len(children) - 1])
+        start = max(0, min(len(children) - 1, int(active[0]))) if isinstance(active, (list, tuple)) and len(active) > 1 else 0
+        end = max(start, min(len(children) - 1, int(active[1]))) if isinstance(active, (list, tuple)) and len(active) > 1 else len(children) - 1
+        first = children[start]
+        last = children[end]
+        bracket_y = max(top + 28, min(bottom - 8, min(first.y, last.y) - 10))
+        draw.line((first.x, bracket_y, last.x + last.width, bracket_y), fill=context.accent, width=4)
+        draw.line((first.x, bracket_y, first.x, bracket_y + 12), fill=context.accent, width=4)
+        draw.line((last.x + last.width, bracket_y, last.x + last.width, bracket_y + 12), fill=context.accent, width=4)
+        pivot_box = children[pivot]
+        px = round(pivot_box.x + pivot_box.width / 2)
+        draw.polygon([(px, top + 14), (px - 10, top + 30), (px + 10, top + 30)], fill=context.accent)
+        draw.text((px + 12, top + 10), "pivot", fill=context.accent)
+        draw.text((left + 14, bottom - 24), str(context.state.content.get("phase", "partition")), fill=context.ink)
+
+    @classmethod
+    def _draw_graph_traversal(cls, context: OperatorDrawingContext) -> None:
+        """Draw traversal edges plus visited/frontier state."""
+
+        ContainerPlugin("graph").draw(context)
+        left, _, _, bottom = context.coordinates
+        visited = context.state.content.get("visited", [])
+        frontier = context.state.content.get("frontier", [])
+        draw = context.draw
+        draw.text((left + 14, bottom - 38), f"visited: {visited}", fill=context.ink)
+        draw.text((left + 14, bottom - 20), f"frontier: {frontier}", fill=context.accent)
+
+    @classmethod
+    def _draw_neural_network(cls, context: OperatorDrawingContext) -> None:
+        """Draw connected layer columns with an active tensor highlight."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        layer_count = max(2, len(cls._child_boxes(context)))
+        columns: list[list[tuple[int, int]]] = []
+        for layer in range(layer_count):
+            x = left + 32 + round(layer * max(28, (right - left - 64) / max(1, layer_count - 1)))
+            nodes = [(x, top + 56 + row * max(20, (bottom - top - 100) // 3)) for row in range(3)]
+            columns.append(nodes)
+        for first, second in zip(columns, columns[1:], strict=False):
+            for source in first:
+                for target in second:
+                    draw.line((*source, *target), fill=context.accent, width=1)
+        active = int(context.state.content.get("active_layer", 0))
+        for index, column in enumerate(columns):
+            for x, y in column:
+                radius = 9 if index == active else 6
+                draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=context.highlight if index == active else context.fill, outline=context.ink, width=2)
+        draw.text((left + 14, bottom - 24), "layered tensor flow", fill=context.accent)
+
+    @classmethod
+    def _draw_protocol(cls, context: OperatorDrawingContext) -> None:
+        """Draw participant lifelines and a highlighted message arrow."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        participants = context.state.content.get("participants", [])
+        names = participants if isinstance(participants, list) and participants else ["Sender", "Receiver"]
+        xs = [left + (index + 1) * (right - left) // (len(names) + 1) for index in range(len(names))]
+        for x, name in zip(xs, names, strict=False):
+            draw.line((x, top + 50, x, bottom - 16), fill=context.accent, width=2)
+            draw.text((x - 28, top + 24), str(name), fill=context.ink)
+        for index, (source, target) in enumerate(zip(xs, xs[1:], strict=False)):
+            y = top + 86 + index * 34
+            draw.line((source, y, target, y), fill=context.ink, width=3)
+            draw.polygon([(target, y), (target - 12, y - 7), (target - 12, y + 7)], fill=context.ink)
+        draw.text((left + 14, bottom - 24), f"message {context.state.content.get('active_message', 0)}", fill=context.accent)
+
+    @classmethod
+    def _draw_tree_index(cls, context: OperatorDrawingContext) -> None:
+        """Draw a hierarchy with a highlighted lookup path."""
+
+        ContainerPlugin("tree").draw(context)
+        draw = context.draw
+        path = context.state.content.get("lookup_path", [])
+        if isinstance(path, list):
+            draw.text((context.coordinates[0] + 14, context.coordinates[3] - 24), f"lookup path: {path}", fill=context.accent)
+
+    @classmethod
+    def _draw_memory_map(cls, context: OperatorDrawingContext) -> None:
+        """Draw addressed memory/hash buckets with an active region marker."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        children = cls._child_boxes(context)
+        if children:
+            active = int(context.state.content.get("active_region", context.state.content.get("hash_value", 0)))
+            for index, child in enumerate(children):
+                if index == active % len(children):
+                    draw.rectangle((child.x, child.y, child.x + child.width, child.y + child.height), outline=context.accent, width=5)
+        draw.text((left + 14, top + 36), context.state.content.get("operator", "memory map").replace("_", " "), fill=context.accent)
+        draw.line((left + 16, bottom - 18, right - 16, bottom - 18), fill=context.ink, width=3)
+
+    @classmethod
+    def _draw_comparison(cls, context: OperatorDrawingContext) -> None:
+        """Draw a two-column comparison with a central decision axis."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        middle = (left + right) // 2
+        draw.rounded_rectangle((left + 10, top + 42, middle - 8, bottom - 10), radius=12, outline=context.accent, width=3)
+        draw.rounded_rectangle((middle + 8, top + 42, right - 10, bottom - 10), radius=12, outline=context.ink, width=3)
+        draw.line((middle, top + 36, middle, bottom - 8), fill=context.ink, width=3)
+        draw.text((left + 20, top + 12), "A", fill=context.accent)
+        draw.text((middle + 20, top + 12), "B", fill=context.ink)
+        draw.polygon([(middle - 12, top + 28), (middle, top + 18), (middle + 12, top + 28)], fill=context.accent)
+
+    @classmethod
+    def _draw_timeline(cls, context: OperatorDrawingContext) -> None:
+        """Draw a time axis with ordered event ticks and labels."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        y = top + (bottom - top) * 0.58
+        draw.line((left + 24, y, right - 24, y), fill=context.ink, width=4)
+        children = cls._child_boxes(context)
+        for index, child in enumerate(children):
+            x = round(child.x + child.width / 2)
+            draw.ellipse((x - 8, y - 8, x + 8, y + 8), fill=context.accent)
+            draw.line((x, y - 8, x, y - 32), fill=context.accent, width=2)
+            draw.text((x - 12, y - 52), str(index + 1), fill=context.ink)
+
+    @classmethod
+    def _draw_cause_effect(cls, context: OperatorDrawingContext) -> None:
+        """Draw a causal chain with emphasized directional arrows."""
+
+        # Explicit connectors are rendered from their declared source/target
+        # objects by SemanticFrameRenderer.  Drawing a second, synthetic rail
+        # here makes arrows appear before their cards and divorces them from
+        # the actual relationships.
+        if context.state.content.get("connector_mode") == "explicit":
+            return
+        cls._draw_flow(context)
+        left, top, _, bottom = context.coordinates
+        context.draw.text((left + 14, top + 34), "cause  ->  mechanism  ->  effect", fill=context.accent)
+        context.draw.text((left + 14, bottom - 28), "causal relation", fill=context.ink)
+
+    @classmethod
+    def _draw_layered(cls, context: OperatorDrawingContext) -> None:
+        """Draw nested architecture bands with layer labels."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        height = max(1, bottom - top)
+        for index, label in enumerate(("interface", "logic", "data")):
+            inset = 18 + index * 18
+            y = top + 48 + index * max(28, (height - 86) // 3)
+            draw.rounded_rectangle((left + inset, y, right - inset, min(bottom - 10, y + 34)), radius=10, outline=context.accent if index == 1 else context.ink, width=3)
+            draw.text((left + inset + 10, y + 7), label, fill=context.ink)
+
+    @classmethod
+    def _draw_flowchart(cls, context: OperatorDrawingContext) -> None:
+        """Draw decision diamonds connected by a directional spine."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        center_x = (left + right) // 2
+        center_y = (top + bottom) // 2
+        draw.polygon([(center_x, top + 34), (right - 28, center_y), (center_x, bottom - 26), (left + 28, center_y)], outline=context.accent, width=3)
+        draw.line((center_x, top + 8, center_x, top + 34), fill=context.ink, width=3)
+        draw.line((center_x, bottom - 26, center_x, bottom - 8), fill=context.ink, width=3)
+        draw.text((center_x - 28, center_y - 8), "decision", fill=context.ink)
+
+    @classmethod
+    def _draw_chart(cls, context: OperatorDrawingContext) -> None:
+        """Draw quantitative axes and operator-specific marks."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        draw.line((left + 34, top + 28, left + 34, bottom - 34), fill=context.ink, width=4)
+        draw.line((left + 34, bottom - 34, right - 18, bottom - 34), fill=context.ink, width=4)
+        operator = str(context.state.content.get("operator", "line_chart"))
+        if operator == "bar_chart":
+            children = cls._child_boxes(context)
+            for index, child in enumerate(children):
+                x = child.x
+                draw.rectangle((x, bottom - 34, x + child.width, max(top + 54, bottom - 34 - (index + 1) * 18)), fill=context.accent, outline=context.ink, width=2)
+        else:
+            points = [(left + 52 + index * max(24, (right - left - 90) // 4), bottom - 54 - round((0.2 + index * 0.16) * max(20, bottom - top - 100))) for index in range(5)]
+            draw.line(points, fill=context.accent, width=4)
+            for point in points:
+                draw.ellipse((point[0] - 5, point[1] - 5, point[0] + 5, point[1] + 5), fill=context.highlight, outline=context.accent)
+
+    @classmethod
+    def _draw_plot(cls, context: OperatorDrawingContext) -> None:
+        """Draw a plotted curve with an annotated observation point."""
+
+        cls._draw_chart(context)
+        left, top, _, _ = context.coordinates
+        context.draw.text((left + 48, top + 42), "observed trend", fill=context.accent)
+
+    @classmethod
+    def _draw_matrix(cls, context: OperatorDrawingContext) -> None:
+        """Draw a matrix grid with a highlighted diagonal."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        rows = cols = 4
+        width = max(1, right - left - 36)
+        height = max(1, bottom - top - 54)
+        cell_w = width / cols
+        cell_h = height / rows
+        for row in range(rows):
+            for col in range(cols):
+                x1 = left + 18 + round(col * cell_w)
+                y1 = top + 42 + round(row * cell_h)
+                x2 = left + 18 + round((col + 1) * cell_w)
+                y2 = top + 42 + round((row + 1) * cell_h)
+                draw.rectangle((x1, y1, x2, y2), fill=context.highlight if row == col else context.fill, outline=context.ink, width=2)
+                draw.text((x1 + 8, y1 + 8), str(row * cols + col), fill=context.ink)
+
+    @classmethod
+    def _draw_equation(cls, context: OperatorDrawingContext) -> None:
+        """Draw a derivation stack with equality rails."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        ContainerPlugin("document").draw(context)
+        rows = ("given", "substitute", "simplify", "result")
+        for index, label in enumerate(rows):
+            y = top + 48 + index * max(22, (bottom - top - 76) // len(rows))
+            draw.text((left + 48, y), f"{index + 1}. {label}", fill=context.accent if index == len(rows) - 1 else context.ink)
+            if index < len(rows) - 1:
+                draw.line((left + 40, y + 19, right - 30, y + 19), fill=context.ink, width=1)
+
+    @classmethod
+    def _draw_code_trace(cls, context: OperatorDrawingContext) -> None:
+        """Draw code lines beside changing state snapshots."""
+
+        left, top, right, bottom = context.coordinates
+        draw = context.draw
+        ContainerPlugin("document").draw(context)
+        split = left + (right - left) * 0.58
+        draw.line((split, top + 42, split, bottom - 12), fill=context.accent, width=3)
+        for index in range(4):
+            y = top + 52 + index * max(22, (bottom - top - 82) // 4)
+            draw.text((left + 18, y), f"{index + 1:>2}  step", fill=context.accent if index == 0 else context.ink)
+            draw.text((split + 16, y), f"state[{index}]", fill=context.ink)
 
     @staticmethod
     def _draw_flow(context: OperatorDrawingContext) -> None:
         """Draw a process lane with phase markers behind its child cards."""
 
+        if context.state.content.get("connector_mode") == "explicit":
+            return
         left, top, right, bottom = context.coordinates
         draw = context.draw
         cards = [
@@ -418,7 +694,9 @@ class SemanticOperatorPlugin(_Plugin):
             for item in context.state.child_ids
             if item in context.boxes and context.boxes[item].width > 40
         ]
-        y = top + round((bottom - top) * 0.78)
+        # Keep the fallback rail aligned with the actual cards.  The previous
+        # fixed 78% position placed arrows in empty space for grid layouts.
+        y = round(sum(box.y + box.height / 2 for box in cards) / len(cards)) if cards else top
         if len(cards) >= 2:
             centers = [round(box.x + box.width / 2) for box in cards]
             draw.line((centers[0], y, centers[-1], y), fill=context.accent, width=6)
@@ -573,6 +851,10 @@ class OperatorRendererRegistry:
                 context.state.content.get("source_operator", "")
             ).strip()
             plugin = self._operators.get(source_operator)
+        if operator and plugin is None:
+            raise UnsupportedSemanticOperatorError(
+                f"no renderer plugin for semantic operator {operator!r}"
+            )
         if plugin is None:
             plugin = self._kinds.get(context.state.kind)
         if plugin is None:

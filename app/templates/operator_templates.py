@@ -7,6 +7,7 @@ from pydantic import Field
 
 from app.domain.layout import ConstraintStrength, ConstraintType, LayoutConstraint
 from app.domain.lesson import ConceptRelation
+from app.domain.semantic_bounds import bound_semantic_operands
 from app.domain.storyboard import VisualObjectSpec
 from app.domain.visual_intent import RendererOperator
 from app.models.base import BaseModel, NonEmptyString
@@ -250,7 +251,7 @@ class OperatorTemplate:
     def instantiate(self, parameters: dict[str, object]) -> VisualObjectSpec:
         """Validate operands and compile a topic-specific semantic hierarchy."""
 
-        normalized = dict(parameters)
+        normalized = bound_semantic_operands(parameters)
         normalized.setdefault("label", self.default_label)
         candidate_operands = next(
             (
@@ -260,6 +261,7 @@ class OperatorTemplate:
             ),
             [],
         )
+        candidate_operands = candidate_operands[:10]
         normalized["operands"] = candidate_operands
         operand_field = {
             RendererOperator.GRAPH_TRAVERSAL: "nodes",
@@ -277,16 +279,12 @@ class OperatorTemplate:
         validated = self.parameter_model.model_validate(
             {key: value for key, value in normalized.items() if key in allowed}
         )
-        # Directed educational templates use the bounded FLOW grammar in
-        # production. Their retrieval names remain stable, while compilation
-        # no longer falls back to an arbitrary nested card tree. Flowchart,
-        # layered, funnel, and Venn keep their own operators so their pixel
-        # silhouettes remain visibly different.
-        dsl_operator = {
-            RendererOperator.CAUSE_EFFECT: RendererOperator.FLOW,
-            RendererOperator.PROCESS: RendererOperator.FLOW,
-        }.get(self.operator, self.operator)
-        return SemanticOperatorCompiler().compile(dsl_operator, validated)
+        # Preserve the selected operator all the way into the visual document.
+        # Cause/effect and process share directional primitives, but they have
+        # different semantic labels, layout policies, motion adapters, and
+        # renderer motifs. Collapsing them to ``flow`` here made template
+        # families look identical even though their contracts were distinct.
+        return SemanticOperatorCompiler().compile(self.operator, validated)
 
 
 class SemanticOperatorCompiler:
@@ -438,6 +436,16 @@ class SemanticOperatorCompiler:
             )
             for index, concept in enumerate(concepts[:12])
         ]
+        # Preserve the lesson-graph identity on every DSL leaf.  Without this
+        # binding the compiler still produced attractive cards, but downstream
+        # asset planning and narration matching saw anonymous ``component``
+        # nodes and could not ground them in the concept graph.
+        for child, concept in zip(children, concepts[:12]):
+            child.concept_ids = [concept.concept_id]
+            child.content["concept_id"] = concept.concept_id
+            child.accessibility_label = (
+                f"{concept.label}: {concept.definition}"
+            )
         pairs = [
             (
                 edge.source_id,

@@ -245,12 +245,19 @@ class ConceptGraphStoryboardBuilder:
 
         if pedagogy is not None:
             routed = {
+                # Overview and collection lessons need a graph-preserving
+                # group root.  Specialized spatial/card roots can discard
+                # dependency edges, which makes a deterministic fallback fail
+                # the semantic-fidelity gate even though the lesson graph is
+                # valid.
+                PedagogyMode.CONCEPT_OVERVIEW: RendererOperator.GROUP,
+                PedagogyMode.CONCEPT_SET: RendererOperator.GROUP,
                 PedagogyMode.COMPARISON: RendererOperator.COMPARISON,
                 PedagogyMode.CHRONOLOGICAL: RendererOperator.TIMELINE,
                 PedagogyMode.PROOF_DERIVATION: RendererOperator.EQUATION,
                 PedagogyMode.CODE_EXECUTION: RendererOperator.CODE_TRACE,
                 PedagogyMode.SIMULATION: RendererOperator.SIMULATION,
-                PedagogyMode.SPATIAL_ANATOMY: RendererOperator.SPATIAL,
+                PedagogyMode.SPATIAL_ANATOMY: RendererOperator.ANATOMY,
             }.get(pedagogy.mode)
             if routed is not None:
                 return routed
