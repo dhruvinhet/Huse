@@ -175,9 +175,17 @@ class HierarchicalLayoutEngine:
             width, height = self._layout_code_trace(content_children, gap)
         elif operator in {"equation", "proof_derivation"} or layout == "equation":
             width, height = self._layout_equation(content_children, gap)
-        elif item.kind == "tree" or layout == "tree":
+        elif (
+            operator in {"tree", "tree_index"}
+            or item.kind == "tree"
+            or layout == "tree"
+        ):
             width, height = self._layout_tree(children)
-        elif item.kind == "graph" or layout == "graph":
+        elif (
+            operator in {"graph", "graph_traversal"}
+            or item.kind == "graph"
+            or layout == "graph"
+        ):
             width, height = self._layout_graph(children)
         elif item.kind == "matrix" or layout == "grid":
             width, height = self._layout_grid(content_children, gap)
@@ -339,22 +347,52 @@ class HierarchicalLayoutEngine:
     def _layout_tree(self, children: list[_MeasuredNode]) -> tuple[float, float]:
         """Lay out level-order tree nodes by depth."""
 
-        node_children = [child for child in children if child.kind != "connector"]
+        supplemental_kinds = {"annotation", "callout"}
+        node_children = [
+            child
+            for child in children
+            if child.kind != "connector"
+            and child.kind not in supplemental_kinds
+        ]
+        supplemental = [
+            child for child in children if child.kind in supplemental_kinds
+        ]
         if not node_children:
-            return self._layout_linear(children, horizontal=True)
+            return self._layout_linear(supplemental or children, horizontal=True)
         max_width = max(child.width for child in node_children)
         max_height = max(child.height for child in node_children)
-        levels = ceil((len(node_children) + 1).bit_length())
-        canvas_width = max_width * max(1, 2 ** (levels - 1))
+        depths = [
+            (index + 1).bit_length() - 1
+            for index in range(len(node_children))
+        ]
+        level_counts = {
+            depth: depths.count(depth)
+            for depth in set(depths)
+        }
+        levels = max(depths) + 1
+        canvas_width = max_width * max(level_counts.values())
         for index, child in enumerate(node_children):
-            depth = (index + 1).bit_length() - 1
+            depth = depths[index]
             index_in_level = index - (2**depth - 1)
-            count = 2**depth
+            count = level_counts[depth]
             slot = canvas_width / count
             child.x = index_in_level * slot + (slot - child.width) / 2
             child.y = depth * (max_height + 72.0)
         height = levels * max_height + max(0, levels - 1) * 72.0
-        return canvas_width, height
+        if not supplemental:
+            return canvas_width, height
+        supplemental_width, supplemental_height = self._layout_linear(
+            supplemental,
+            horizontal=False,
+            gap=20.0,
+        )
+        for child in supplemental:
+            child.x += max(0.0, (canvas_width - supplemental_width) / 2)
+            child.y += height + self.DEFAULT_GAP
+        return (
+            max(canvas_width, supplemental_width),
+            height + self.DEFAULT_GAP + supplemental_height,
+        )
 
     def _layout_graph(self, children: list[_MeasuredNode]) -> tuple[float, float]:
         """Lay out graph vertices on a circle and retain connector overlays."""

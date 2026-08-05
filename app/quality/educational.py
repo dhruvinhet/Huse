@@ -1,5 +1,7 @@
 """Deterministic educational-coherence evaluation."""
 
+import json
+
 from app.domain.generation import AudienceLevel, AudienceProfile
 from app.domain.lesson import ConceptGraph, ConceptRelation
 from app.domain.narration import NarrationPlan
@@ -263,7 +265,12 @@ class EducationalQualityEvaluator:
                 repair_target="storyboard",
             ))
             return 0.35
-        focus_signatures: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+        focus_signatures: list[
+            tuple[
+                tuple[str, ...],
+                tuple[tuple[str, tuple[str, ...], str], ...],
+            ]
+        ] = []
         for beat in storyboard.beats:
             emphasized = tuple(sorted({
                 target
@@ -272,7 +279,15 @@ class EducationalQualityEvaluator:
                 for target in operation.target_ids
             }))
             changed = tuple(sorted({
-                f"{operation.operation.value}:{target}"
+                (
+                    operation.operation.value,
+                    tuple(sorted(operation.target_ids)),
+                    json.dumps(
+                        operation.arguments,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                )
                 for operation in beat.operations
                 if operation.operation in {
                     OperationType.HIDE,
@@ -284,7 +299,6 @@ class EducationalQualityEvaluator:
                     OperationType.GROUP,
                     OperationType.UNGROUP,
                 }
-                for target in operation.target_ids
             }))
             focus_signatures.append((emphasized, changed))
         repeated = [

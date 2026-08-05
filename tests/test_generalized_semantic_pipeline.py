@@ -320,6 +320,81 @@ def test_quality_gate_rejects_flat_containment_and_highlight_only_shots() -> Non
     assert "visual_progression_highlight_only" in codes
 
 
+@pytest.mark.parametrize(
+    ("second_text", "expects_repeat"),
+    [("Second explanation", False), ("First explanation", True)],
+)
+def test_visual_progression_compares_update_payloads(
+    second_text: str,
+    expects_repeat: bool,
+) -> None:
+    """Updates to one object are distinct when their new content differs."""
+
+    evidence = VisualObjectSpec(
+        object_id="evidence",
+        kind="callout",
+        semantic_role="evidence",
+        concept_ids=["concept"],
+        content={"text": "Initial explanation"},
+        accessibility_label="Evidence",
+    )
+    beats = [
+        VisualBeat(
+            beat_id="beat_0",
+            section_id="explanation",
+            concept_ids=["concept"],
+            teaching_intent="Introduce the visible explanation.",
+            phrase_intent="Introduce the visible explanation clearly.",
+            purpose="introduce",
+            estimated_duration=2,
+            operations=[
+                VisualOperation(
+                    operation_id="create_evidence",
+                    operation=OperationType.CREATE,
+                    target_ids=["evidence"],
+                    arguments={"objects": [evidence.model_dump(mode="json")]},
+                ),
+            ],
+        ),
+    ]
+    for index, text in enumerate(
+        ("First explanation", second_text),
+        start=1,
+    ):
+        beats.append(VisualBeat(
+            beat_id=f"beat_{index}",
+            section_id="explanation",
+            concept_ids=["concept"],
+            teaching_intent="Change the visible explanation.",
+            phrase_intent="Describe the visible explanation clearly.",
+            purpose="transform",
+            estimated_duration=2,
+            operations=[
+                VisualOperation(
+                    operation_id=f"update_{index}",
+                    operation=OperationType.UPDATE,
+                    target_ids=["evidence"],
+                    arguments={"content": {"text": text}},
+                ),
+                VisualOperation(
+                    operation_id=f"highlight_{index}",
+                    operation=OperationType.HIGHLIGHT,
+                    target_ids=["evidence"],
+                ),
+            ],
+        ))
+    board = Storyboard(
+        document_id="update_payloads",
+        title="Update payloads",
+        beats=beats,
+    )
+
+    report = EducationalQualityEvaluator().evaluate("storyboard", board, {})
+    codes = {item.code for item in report.findings}
+
+    assert ("visual_state_repeated" in codes) is expects_repeat
+
+
 def test_mechanism_validation_rejects_a_parts_only_graph() -> None:
     """How-it-works requests require behavior, not merely named components."""
 

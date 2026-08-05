@@ -6,11 +6,12 @@ from app.camera import SemanticCameraPlanner
 from app.domain.assets import ResolvedAssetSet
 from app.domain.layout import Viewport
 from app.domain.narration import AlignedAudio, PhraseTiming
-from app.domain.storyboard import ShotPlan
+from app.domain.operations import OperationType, VisualOperation
+from app.domain.storyboard import ShotPlan, VisualObjectSpec
 from app.domain.visual_document import ObjectLifecycle
 from app.layout import HierarchicalLayoutEngine
 from app.motion import SemanticAnimationPlanner
-from app.quality import DeterministicQualityEvaluator
+from app.quality import DeterministicQualityEvaluator, VisualQualityEvaluator
 from app.semantic_assets import CatalogSemanticAssetResolver
 from app.state import VisualStateTransitionEngine
 from tests.test_domain_v2 import concept_graph, storyboard
@@ -70,6 +71,81 @@ def test_layout_motion_camera_and_quality_form_valid_plan() -> None:
     assert len(camera.cues) == 2
     assert report.decision.value == "pass"
     assert report.scores["semantic_coverage"] == 1
+
+
+def test_tree_operator_overrides_generic_horizontal_layout_hint() -> None:
+    """A semantic tree must use depth instead of collapsing into a flat rail."""
+
+    tree = VisualObjectSpec(
+        object_id="concept_tree",
+        kind="nested_group",
+        semantic_role="compiled_visual_intent",
+        content={
+            "label": "Search concepts",
+            "layout": "horizontal",
+            "operator": "tree",
+        },
+        children=[
+            VisualObjectSpec(
+                object_id=f"concept_{index}",
+                kind="component",
+                semantic_role="concept",
+                content={
+                    "label": f"Concept {index}",
+                    "detail": "A complete explanation of this search concept.",
+                },
+                accessibility_label=f"Concept {index}",
+            )
+            for index in range(7)
+        ] + [
+            VisualObjectSpec(
+                object_id="evidence",
+                kind="callout",
+                semantic_role="evidence",
+                content={"text": "A concise piece of supporting evidence."},
+                accessibility_label="Supporting evidence",
+            ),
+        ],
+        accessibility_label="Search concept tree",
+    )
+    board = storyboard()
+    first = board.beats[0].model_copy(update={
+        "operations": [
+            VisualOperation(
+                operation_id="create_tree",
+                operation=OperationType.CREATE,
+                target_ids=[tree.object_id],
+                arguments={"objects": [tree.model_dump(mode="json")]},
+            )
+        ],
+    })
+    board = board.model_copy(update={"beats": [first]})
+
+    document = VisualStateTransitionEngine().materialize(board)
+    layout = HierarchicalLayoutEngine().layout(
+        document,
+        ResolvedAssetSet(),
+        Viewport(width=1920, height=1080),
+    )
+    report = VisualQualityEvaluator().evaluate(
+        "layout",
+        layout,
+        {"layout": layout},
+    )
+    compiled_report = DeterministicQualityEvaluator().evaluate(
+        "layout",
+        layout,
+        {"layout": layout, "document": document},
+    )
+    content_root = next(iter(layout.state_roots.values())).children[0]
+
+    assert content_root.box.height / layout.viewport.height >= 0.20
+    assert "canvas_underused" not in {
+        finding.code for finding in report.findings
+    }
+    assert "semantic_text_geometry_unreadable" not in {
+        finding.code for finding in compiled_report.findings
+    }
 
 
 def test_semantic_asset_diagnostic_fallback_creates_ready_svg(tmp_path: Path) -> None:
