@@ -12,6 +12,7 @@ from app.quality.storyboard_critic import GeminiStoryboardCritic
 from app.quality.educational import EducationalQualityEvaluator
 from app.quality.visual import VisualQualityEvaluator
 from app.quality.rendered import RenderedFrameQualityEvaluator
+from app.quality.repair import QualityRepairPlanner
 
 __all__ = [
     "DeterministicQualityEvaluator",
@@ -25,4 +26,5 @@ __all__ = [
     "EducationalQualityEvaluator",
     "VisualQualityEvaluator",
     "RenderedFrameQualityEvaluator",
+    "QualityRepairPlanner",
 ]

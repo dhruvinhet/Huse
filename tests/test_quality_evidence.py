@@ -10,6 +10,8 @@ from app.domain.motion import MotionEvent, MotionPlan
 from app.domain.narration import AlignedAudio, PhraseTiming
 from app.domain.operations import OperationType, VisualOperation
 from app.domain.quality import EvaluationDecision, QualityReport
+from app.domain.quality import FindingSeverity, QualityFinding
+from app.domain.repair import RepairStage
 from app.domain.rendering import FrameSequence
 from app.domain.strategy import TemplateMatch
 from app.domain.storyboard import VisualBeat
@@ -18,6 +20,7 @@ from app.quality import (
     DeterministicQualityEvaluator,
     EducationalQualityEvaluator,
     QualityReviewPolicy,
+    QualityRepairPlanner,
     RenderedFrameQualityEvaluator,
     VisualQualityEvaluator,
 )
@@ -282,3 +285,35 @@ def test_visual_preflight_detects_crossing_relation_paths() -> None:
     )
     assert crossing.object_ids == ["edge_ab", "edge_cd"]
     assert crossing.measured_value == 1
+
+
+def test_repair_planner_maps_owner_dependencies_and_patch_scope() -> None:
+    report = QualityReport(
+        overall_score=0.5,
+        scores={"layout": 0.5},
+        findings=[QualityFinding(
+            code="rendered_safe_area_clipped",
+            severity=FindingSeverity.ERROR,
+            artifact_id="frames",
+            message="Ink touches the frame edge.",
+            repair_target="layout",
+            repair_scope="frame",
+            beat_id="beat_2",
+            object_ids=["node_2"],
+            frame_numbers=[11, 12],
+            measured_value=2,
+            required_value=0,
+            patch_paths=["/layout", "/beats/1"],
+        )],
+        decision=EvaluationDecision.REPAIR,
+    )
+
+    plan = QualityRepairPlanner().plan(report)
+
+    assert plan.owner_stage is RepairStage.LAYOUT
+    assert RepairStage.NARRATION not in plan.invalidated_stages
+    assert RepairStage.RENDERER in plan.invalidated_stages
+    assert plan.allowed_patch_paths == ["/layout"]
+    assert plan.beat_ids == ["beat_2"]
+    assert plan.frame_numbers == [11, 12]
+    assert plan.fingerprint == QualityRepairPlanner().plan(report).fingerprint

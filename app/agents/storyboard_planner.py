@@ -6,7 +6,7 @@ from app.domain.pedagogy import PedagogyPlan
 from app.domain.storyboard import Storyboard
 from app.domain.strategy import TemplateMatch, VisualStrategy
 from app.domain.quality import QualityReport
-from app.domain.visual_intent import VisualIntent
+from app.domain.visual_intent import VisualIntent, VisualIntentPatch
 from app.planning.visual_intent_compiler import VisualIntentCompiler
 from app.services.gemini_client import GeminiClient
 
@@ -22,6 +22,12 @@ class GeminiStoryboardPlanner:
             client,
             VisualIntent,
             "Visual Intent Planner",
+            effective_attempts,
+        )
+        self._repair_agent = StructuredGeminiAgent(
+            client,
+            VisualIntentPatch,
+            "Visual Intent Beat Repair",
             effective_attempts,
         )
         self._compiler = VisualIntentCompiler()
@@ -147,6 +153,78 @@ class GeminiStoryboardPlanner:
         )
         self._last_intent = intent
         return self._compiler.compile(intent, lesson, self._last_pedagogy)
+
+    def repair_beats(
+        self,
+        lesson: LessonPlan,
+        previous: Storyboard,
+        report: QualityReport,
+        strategies: list[VisualStrategy],
+        templates: list[TemplateMatch],
+        beat_ids: list[str],
+    ) -> Storyboard:
+        """Request and merge only the intent shots implicated by findings."""
+
+        if self._last_intent is None:
+            return self.repair(lesson, previous, report, strategies, templates)
+        index_by_beat = {
+            beat.beat_id: index for index, beat in enumerate(previous.beats)
+        }
+        target_indexes = sorted({
+            index_by_beat[beat_id]
+            for beat_id in beat_ids
+            if beat_id in index_by_beat and index_by_beat[beat_id] < len(self._last_intent.shots)
+        })
+        if not target_indexes:
+            return self.repair(lesson, previous, report, strategies, templates)
+        target_shots = [self._last_intent.shots[index] for index in target_indexes]
+        target_ids = {shot.shot_id for shot in target_shots}
+        del templates
+
+        def validate_patch(patch: VisualIntentPatch) -> None:
+            actual = {shot.shot_id for shot in patch.shots}
+            if actual != target_ids:
+                raise ValueError(
+                    "visual intent patch must contain exactly the requested shot IDs"
+                )
+            merged = self._merge_patch(self._last_intent, patch)
+            self._compiler.validate_intent(merged, lesson, self._last_pedagogy)
+
+        patch = self._repair_agent.generate(
+            (
+                "Repair only the supplied high-level shots using the actionable "
+                "quality findings. Return exactly the requested shot IDs. Keep "
+                "all other lesson shots untouched. Change only concepts, relation, "
+                "focal object, evidence, transformation, or renderer operator; "
+                "never emit low-level scene objects or operations."
+            ),
+            {
+                "lesson": lesson.model_dump(mode="json"),
+                "target_shots": [shot.model_dump(mode="json") for shot in target_shots],
+                "quality_findings": [
+                    finding.model_dump(mode="json")
+                    for finding in report.findings
+                    if finding.beat_id in beat_ids
+                ],
+                "strategy_hints": [item.teaching_strategy for item in strategies],
+            },
+            validator=validate_patch,
+        )
+        intent = self._merge_patch(self._last_intent, patch)
+        self._last_intent = intent
+        return self._compiler.compile(intent, lesson, self._last_pedagogy)
+
+    @staticmethod
+    def _merge_patch(
+        intent: VisualIntent,
+        patch: VisualIntentPatch,
+    ) -> VisualIntent:
+        replacements = {shot.shot_id: shot for shot in patch.shots}
+        return intent.model_copy(update={
+            "shots": [
+                replacements.get(shot.shot_id, shot) for shot in intent.shots
+            ]
+        })
 
     @staticmethod
     def _distill_storyboard(previous: Storyboard) -> dict[str, object]:

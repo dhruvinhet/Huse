@@ -6,6 +6,7 @@ import re
 from app.domain.layout import LaidOutNode, LayoutPlan
 from app.domain.motion import MotionEvent, MotionPlan
 from app.domain.narration import AlignedAudio
+from app.domain.repair import RepairPlan
 from app.domain.operations import OperationType, VisualOperation
 from app.domain.storyboard import Storyboard
 
@@ -239,6 +240,41 @@ class SemanticAnimationPlanner:
                     )
                 )
         return MotionPlan(duration=alignment.duration, events=events)
+
+    def repair(
+        self,
+        storyboard: Storyboard,
+        layout: LayoutPlan,
+        alignment: AlignedAudio,
+        previous: MotionPlan,
+        repair: RepairPlan,
+    ) -> MotionPlan:
+        """Replan only motion and apply bounded timing corrections."""
+
+        candidate = self.plan(storyboard, layout, alignment)
+        codes = set(repair.finding_codes)
+        if "rendered_opening_blank" in codes and candidate.events:
+            first_beat = storyboard.beats[0].beat_id
+            first_events = [
+                event for event in candidate.events if event.beat_id == first_beat
+            ]
+            if first_events:
+                first = min(first_events, key=lambda event: event.start_time)
+                first.start_time = 0.0
+                first.duration = max(first.duration, min(0.5, candidate.duration))
+        if "static_gap_exceeded" in codes and candidate.events:
+            ordered = sorted(candidate.events, key=lambda event: event.start_time)
+            for index, event in enumerate(ordered):
+                boundary = (
+                    ordered[index + 1].start_time
+                    if index + 1 < len(ordered)
+                    else candidate.duration
+                )
+                event.duration = max(
+                    event.duration,
+                    min(boundary - event.start_time, 3.0),
+                )
+        return candidate
 
     @staticmethod
     def _word_anchors(

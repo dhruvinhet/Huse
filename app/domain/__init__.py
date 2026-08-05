@@ -48,6 +48,7 @@ from app.domain.quality import (
     QualityFinding,
     QualityReport,
 )
+from app.domain.repair import RepairPlan, RepairStage
 from app.domain.storyboard import (
     AttentionCue,
     CameraIntent,
@@ -63,7 +64,12 @@ from app.domain.visual_document import (
     VisualDocument,
     VisualState,
 )
-from app.domain.visual_intent import RendererOperator, ShotSpec, VisualIntent
+from app.domain.visual_intent import (
+    RendererOperator,
+    ShotSpec,
+    VisualIntent,
+    VisualIntentPatch,
+)
 
 __all__ = [
     "AlignedAudio",
@@ -110,6 +116,8 @@ __all__ = [
     "PipelineVersion",
     "QualityFinding",
     "QualityReport",
+    "RepairPlan",
+    "RepairStage",
     "ResolvedAssetSet",
     "ResolvedSemanticAsset",
     "RendererOperator",
@@ -121,6 +129,7 @@ __all__ = [
     "VisualStrategy",
     "VisualDocument",
     "VisualIntent",
+    "VisualIntentPatch",
     "VisualObjectSpec",
     "VisualOperation",
     "VisualState",

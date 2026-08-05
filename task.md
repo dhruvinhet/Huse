@@ -169,17 +169,17 @@ Acceptance criteria:
 Primary file: `app/application/orchestrators/pipeline_v2.py`, with repair
 contracts in planning/layout/rendering/quality modules.
 
-- [ ] Map every quality finding code to an owning stage and allowed JSON Patch
+- [x] Map every quality finding code to an owning stage and allowed JSON Patch
   paths.
-- [ ] Preserve successful lesson, pedagogy, narration, TTS, asset, and compiled
+- [x] Preserve successful lesson, pedagogy, narration, TTS, asset, and compiled
   outputs whenever the requested repair does not invalidate them.
-- [ ] Repair a storyboard intent/beat rather than regenerating the complete
+- [x] Repair a storyboard intent/beat rather than regenerating the complete
   visual intent when the finding is beat-local.
-- [ ] Allow layout, motion, camera, and rendered-pixel findings to repair their
+- [x] Allow layout, motion, camera, and rendered-pixel findings to repair their
   own artifacts without consuming a blind full-pipeline retry.
-- [ ] Track dependency invalidation explicitly and rerender only affected beats
+- [x] Track dependency invalidation explicitly and rerender only affected beats
   and transition windows.
-- [ ] Detect a repeated identical repair/finding pair and stop with a diagnostic
+- [x] Detect a repeated identical repair/finding pair and stop with a diagnostic
   explaining why the repair made no progress.
 
 Acceptance criteria:

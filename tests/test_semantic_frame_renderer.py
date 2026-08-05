@@ -15,12 +15,18 @@ from app.domain.camera import CameraCue, CameraOperation, CameraPlan
 from app.domain.layout import LayoutBox, Viewport
 from app.domain.motion import MotionEvent, MotionPlan
 from app.domain.rendering import FrameSequence, RenderJob
+from app.domain.quality import (
+    EvaluationDecision,
+    FindingSeverity,
+    QualityFinding,
+    QualityReport,
+)
 from app.domain.visual_document import ObjectState, VisualState
 from app.layout import HierarchicalLayoutEngine
 from app.motion import SemanticAnimationPlanner
 from app.rendering import SemanticFrameRenderer
 from app.rendering.operator_plugins import OperatorRendererRegistry
-from app.quality import RenderedFrameQualityEvaluator
+from app.quality import QualityRepairPlanner, RenderedFrameQualityEvaluator
 from app.state import VisualStateTransitionEngine
 from app.timeline import PhraseManifestBuilder
 from tests.test_domain_v2 import storyboard
@@ -118,6 +124,66 @@ def test_semantic_renderer_reuses_pixel_identical_hold_frames(
 
     assert renderer._link_or_copy.call_count == 6
     assert len(list(tmp_path.glob("frame_*.png"))) == 8
+
+
+def test_renderer_repair_replaces_only_affected_frames(tmp_path: Path) -> None:
+    """A frame-scoped repair preserves every unaffected encoded PNG."""
+
+    board = storyboard()
+    alignment = aligned_audio()
+    document = VisualStateTransitionEngine().materialize(board)
+    assets = ResolvedAssetSet()
+    layout = HierarchicalLayoutEngine().layout(
+        document,
+        assets,
+        Viewport(width=640, height=360, margin=24),
+    )
+    motion = SemanticAnimationPlanner().plan(board, layout, alignment)
+    camera = SemanticCameraPlanner().plan(board, layout, alignment)
+    manifest = PhraseManifestBuilder().build(board, alignment, fps=2)
+    job = RenderJob(
+        run_id="partial_repair",
+        document=document,
+        assets=assets,
+        layout=layout,
+        motion=motion,
+        camera=camera,
+        manifest=manifest,
+        output_folder=tmp_path.as_posix(),
+    )
+    renderer = SemanticFrameRenderer()
+    previous = renderer.render(job)
+    original_hashes = {
+        path.name: path.read_bytes()
+        for path in tmp_path.glob("frame_*.png")
+    }
+    renderer._save_png = MagicMock(wraps=renderer._save_png)
+    repair = QualityRepairPlanner().plan(QualityReport(
+        overall_score=0.5,
+        scores={"pixels": 0.5},
+        findings=[QualityFinding(
+            code="rendered_samples_blank",
+            severity=FindingSeverity.ERROR,
+            artifact_id="frames",
+            message="One sampled frame is blank.",
+            repair_target="renderer",
+            repair_scope="frame",
+            frame_numbers=[4],
+            patch_paths=["/frames/4"],
+        )],
+        decision=EvaluationDecision.REPAIR,
+    ))
+
+    repaired = renderer.repair(job, previous, repair)
+
+    assert repaired.total_frames == previous.total_frames
+    assert renderer._save_png.call_count == 1
+    assert len(list(tmp_path.glob("frame_*.png"))) == 8
+    assert all(
+        path.read_bytes() == original_hashes[path.name]
+        for path in tmp_path.glob("frame_*.png")
+        if path.name != "frame_000004.png"
+    )
 
 
 def test_connector_anchors_use_facing_box_boundaries() -> None:

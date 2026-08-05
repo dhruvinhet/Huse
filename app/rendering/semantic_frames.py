@@ -17,6 +17,7 @@ from app.domain.camera import CameraCue, CameraOperation
 from app.domain.layout import LaidOutNode, LayoutBox, Viewport
 from app.domain.motion import MotionEvent
 from app.domain.rendering import FrameSequence, RenderJob
+from app.domain.repair import RepairPlan
 from app.domain.visual_document import ObjectLifecycle, ObjectState, VisualState
 from app.models.render import RenderableObject
 from app.renderers.svg_renderer import SVGRenderer
@@ -75,10 +76,43 @@ class SemanticFrameRenderer:
     def render(self, job: RenderJob) -> FrameSequence:
         """Render all manifest frames as a continuous deterministic sequence."""
 
+        return self._render(job, None)
+
+    def repair(
+        self,
+        job: RenderJob,
+        previous: FrameSequence,
+        repair: RepairPlan,
+    ) -> FrameSequence:
+        """Rerender only affected beats, frames, and their transition edges."""
+
+        del previous
+        affected = set(repair.frame_numbers)
+        if repair.beat_ids:
+            state_order = [state.beat_id for state in job.document.states]
+            for index, beat_id in enumerate(state_order):
+                if beat_id not in repair.beat_ids or index >= len(job.manifest.scenes):
+                    continue
+                scene = job.manifest.scenes[index]
+                affected.update(range(scene.frame_start, scene.frame_end + 1))
+                if scene.frame_start > 1:
+                    affected.add(scene.frame_start - 1)
+                if scene.frame_end < job.manifest.total_frames:
+                    affected.add(scene.frame_end + 1)
+        return self._render(job, affected or None)
+
+    def _render(
+        self,
+        job: RenderJob,
+        only_frames: set[int] | None,
+    ) -> FrameSequence:
+        """Render all frames or replace a bounded subset in an existing sequence."""
+
         frames_directory = self._working_path(Path(job.output_folder))
         frames_directory.mkdir(parents=True, exist_ok=True)
-        for stale in frames_directory.glob("frame_*.png"):
-            stale.unlink()
+        if only_frames is None:
+            for stale in frames_directory.glob("frame_*.png"):
+                stale.unlink()
 
         state_by_beat = {state.beat_id: state for state in job.document.states}
         state_order = [state.beat_id for state in job.document.states]
@@ -155,7 +189,7 @@ class SemanticFrameRenderer:
         beat_index = 0
         rendered_frames = 0
         reused_frames = 0
-        if self._debug is not None:
+        if self._debug is not None and only_frames is None:
             self._debug.write_text("v2/frames/frame_trace.jsonl", "")
 
         with ThreadPoolExecutor(
@@ -171,6 +205,11 @@ class SemanticFrameRenderer:
                 ):
                     beat_index += 1
                 beat_id = state_order[beat_index]
+                if only_frames is not None and frame_number not in only_frames:
+                    last_signature = None
+                    last_rendered_path = None
+                    last_save = None
+                    continue
                 state = state_by_beat[beat_id]
                 previous_state = (
                     state_by_beat[state_order[beat_index - 1]]
@@ -266,12 +305,18 @@ class SemanticFrameRenderer:
                 trace_batch,
             )
         logger.info(
-            "Semantic frames complete (rendered={}, reused={}, "
+            "Semantic frames complete (rendered={}, reused={}, requested={}, "
             "png_workers={}).",
             rendered_frames,
             reused_frames,
+            len(only_frames) if only_frames is not None else job.manifest.total_frames,
             save_workers,
         )
+        samples = [
+            (frames_directory / f"frame_{number:06d}.png").as_posix()
+            for number in sorted(sample_frames)
+            if (frames_directory / f"frame_{number:06d}.png").exists()
+        ]
         return FrameSequence(
             folder=Path(job.output_folder).as_posix(),
             total_frames=job.manifest.total_frames,

@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from app.application.orchestrators import V2PipelineRunner
 from app.agents import StructuredAgentError
 from app.domain.generation import (
@@ -260,6 +262,294 @@ def test_v2_pipeline_compiles_semantics_to_composition(tmp_path: Path) -> None:
     assert composer.job.audio.duration == 4
     assert runner.last_execution_time > 0
     assert "Plan Lesson" in runner.stage_timings
+
+
+def test_layout_repair_reuses_every_successful_upstream_stage(
+    tmp_path: Path,
+) -> None:
+    """A layout finding invalidates layout and downstream work only."""
+
+    from app.audio import ScenePhraseAligner
+    from app.camera import SemanticCameraPlanner
+    from app.domain.assets import ResolvedAssetSet
+    from app.domain.repair import RepairStage
+    from app.layout import HierarchicalLayoutEngine
+    from app.motion import SemanticAnimationPlanner
+    from app.state import VisualStateTransitionEngine
+
+    class CountingNarration(FakeNarrationWriter):
+        calls = 0
+
+        def write(self, board, audience):
+            self.calls += 1
+            return super().write(board, audience)
+
+    class CountingAssets:
+        calls = 0
+
+        def resolve(self, board):
+            del board
+            self.calls += 1
+            return ResolvedAssetSet()
+
+    class CountingSpeech(DynamicFakeSpeech):
+        calls = 0
+
+        def synthesize(self, narration, voice):
+            self.calls += 1
+            return super().synthesize(narration, voice)
+
+    class CountingState(VisualStateTransitionEngine):
+        calls = 0
+
+        def materialize(self, board):
+            self.calls += 1
+            return super().materialize(board)
+
+    class CountingLayout(HierarchicalLayoutEngine):
+        calls = 0
+
+        def layout(self, document, assets, viewport):
+            self.calls += 1
+            return super().layout(document, assets, viewport)
+
+    class CountingMotion(SemanticAnimationPlanner):
+        calls = 0
+
+        def plan(self, board, layout, alignment):
+            self.calls += 1
+            return super().plan(board, layout, alignment)
+
+    class CountingCamera(SemanticCameraPlanner):
+        calls = 0
+
+        def plan(self, board, layout, alignment):
+            self.calls += 1
+            return super().plan(board, layout, alignment)
+
+    class RepairLayoutOnce:
+        compiled_calls = 0
+
+        def evaluate(self, artifact_id, artifact, context):
+            del artifact_id
+            if isinstance(artifact, Storyboard):
+                return QualityReport(
+                    overall_score=1,
+                    scores={"storyboard": 1},
+                    decision=EvaluationDecision.PASS,
+                )
+            self.compiled_calls += 1
+            if self.compiled_calls == 1:
+                return QualityReport(
+                    overall_score=0.5,
+                    scores={"layout": 0.5},
+                    findings=[QualityFinding(
+                        code="object_clipped",
+                        severity=FindingSeverity.ERROR,
+                        artifact_id="layout",
+                        message="One object is outside the viewport.",
+                        repair_target="layout",
+                        repair_scope="object",
+                        object_ids=["output_box"],
+                        patch_paths=["/layout"],
+                    )],
+                    decision=EvaluationDecision.REPAIR,
+                )
+            return QualityReport(
+                overall_score=1,
+                scores={"layout": 1},
+                decision=EvaluationDecision.PASS,
+            )
+
+    narration = CountingNarration()
+    assets = CountingAssets()
+    speech = CountingSpeech()
+    state = CountingState()
+    layout = CountingLayout()
+    motion = CountingMotion()
+    camera = CountingCamera()
+    renderer = FakeRenderer()
+    runner = V2PipelineRunner(
+        lesson_planner=FakeLessonPlanner(),
+        storyboard_planner=FakeStoryboardPlanner(),
+        narration_writer=narration,
+        knowledge_base=FakeKnowledge(),
+        template_library=FakeTemplates(),
+        speech_synthesizer=speech,
+        phrase_aligner=ScenePhraseAligner(),
+        asset_resolver=assets,
+        state_engine=state,
+        layout_engine=layout,
+        animation_planner=motion,
+        camera_planner=camera,
+        quality_evaluator=RepairLayoutOnce(),
+        render_engine=renderer,
+        composition_engine=FakeComposer(),
+        debug_recorder=DebugRecorder(enabled=False, root_dir=tmp_path),
+    )
+    request = GenerationRequest(
+        run_id="layout_local_repair",
+        topic="Transformation",
+        target_duration=4,
+        audience=AudienceProfile(learning_goal="Understand transformation"),
+        output=OutputProfile(width=640, height=360, fps=2),
+    )
+
+    runner.run(request, tmp_path.as_posix())
+
+    assert narration.calls == 1
+    assert assets.calls == 1
+    assert speech.calls == 1
+    assert state.calls == 1
+    assert layout.calls == 2
+    assert motion.calls == 2
+    assert camera.calls == 2
+    assert runner.repair_history[0].owner_stage is RepairStage.LAYOUT
+
+
+def test_repeated_identical_repair_stops_with_no_progress_diagnostic(
+    tmp_path: Path,
+) -> None:
+    """An unchanged finding cannot consume the repair budget blindly."""
+
+    from app.application.orchestrators.pipeline_v2 import QualityGateError
+    from app.planning import PedagogyRouter
+
+    runner = V2PipelineRunner(
+        lesson_planner=FakeLessonPlanner(),
+        storyboard_planner=FakeStoryboardPlanner(),
+        narration_writer=FakeNarrationWriter(),
+        knowledge_base=FakeKnowledge(),
+        template_library=FakeTemplates(),
+        speech_synthesizer=DynamicFakeSpeech(),
+        render_engine=FakeRenderer(),
+        composition_engine=FakeComposer(),
+        debug_recorder=DebugRecorder(enabled=False, root_dir=tmp_path),
+    )
+    request = GenerationRequest(
+        run_id="no_progress",
+        topic="Transformation",
+        audience=AudienceProfile(learning_goal="Understand transformation"),
+    )
+    lesson = FakeLessonPlanner().plan(request)
+    board = storyboard()
+    pedagogy = PedagogyRouter().route(lesson, request.audience)
+    report = QualityReport(
+        overall_score=0.5,
+        scores={"layout": 0.5},
+        findings=[QualityFinding(
+            code="object_clipped",
+            severity=FindingSeverity.ERROR,
+            artifact_id="layout",
+            message="The same object remains clipped.",
+            repair_target="layout",
+            repair_scope="object",
+            object_ids=["output_box"],
+            measured_value=12,
+            required_value=0,
+            patch_paths=["/layout"],
+        )],
+        decision=EvaluationDecision.REPAIR,
+    )
+
+    assert runner._repair_or_raise(
+        lesson,
+        board,
+        report,
+        [],
+        [],
+        0,
+        pedagogy,
+    ) is board
+    with pytest.raises(QualityGateError, match="repair made no progress"):
+        runner._repair_or_raise(
+            lesson,
+            board,
+            report,
+            [],
+            [],
+            1,
+            pedagogy,
+        )
+
+
+def test_storyboard_repair_dispatches_only_implicated_beats(tmp_path: Path) -> None:
+    """Beat-scoped findings use the compact repair contract when available."""
+
+    from app.planning import PedagogyRouter
+
+    class BeatRepairPlanner(FakeStoryboardPlanner):
+        requested: list[str] = []
+
+        def repair(self, lesson, previous, report, strategies, templates):
+            raise AssertionError("full storyboard repair must not run")
+
+        def repair_beats(
+            self,
+            lesson,
+            previous,
+            report,
+            strategies,
+            templates,
+            beat_ids,
+        ):
+            del lesson, report, strategies, templates
+            self.requested = list(beat_ids)
+            beats = [
+                beat.model_copy(update={"phrase_intent": "Repaired evidence."})
+                if beat.beat_id in beat_ids else beat
+                for beat in previous.beats
+            ]
+            return previous.model_copy(update={"beats": beats})
+
+    planner = BeatRepairPlanner()
+    runner = V2PipelineRunner(
+        lesson_planner=FakeLessonPlanner(),
+        storyboard_planner=planner,
+        narration_writer=FakeNarrationWriter(),
+        knowledge_base=FakeKnowledge(),
+        template_library=FakeTemplates(),
+        speech_synthesizer=DynamicFakeSpeech(),
+        render_engine=FakeRenderer(),
+        composition_engine=FakeComposer(),
+        debug_recorder=DebugRecorder(enabled=False, root_dir=tmp_path),
+    )
+    request = GenerationRequest(
+        run_id="beat_repair",
+        topic="Transformation",
+        audience=AudienceProfile(learning_goal="Understand transformation"),
+    )
+    lesson = FakeLessonPlanner().plan(request)
+    board = storyboard()
+    report = QualityReport(
+        overall_score=0.7,
+        scores={"evidence": 0.7},
+        findings=[QualityFinding(
+            code="weak_focal_evidence",
+            severity=FindingSeverity.ERROR,
+            artifact_id="storyboard",
+            message="The second beat needs concrete evidence.",
+            repair_target="storyboard",
+            repair_scope="beat",
+            beat_id="beat_2",
+            patch_paths=["/beats/1"],
+        )],
+        decision=EvaluationDecision.REPAIR,
+    )
+
+    repaired = runner._repair_or_raise(
+        lesson,
+        board,
+        report,
+        [],
+        [],
+        0,
+        PedagogyRouter().route(lesson, request.audience),
+    )
+
+    assert planner.requested == ["beat_2"]
+    assert repaired.beats[0].phrase_intent == board.beats[0].phrase_intent
+    assert repaired.beats[1].phrase_intent == "Repaired evidence."
 
 
 def test_v2_pipeline_survives_invalid_storyboard_and_narration(

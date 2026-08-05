@@ -87,3 +87,16 @@ class VisualIntent(BaseModel):
         if len(shot_ids) != len(set(shot_ids)):
             raise ValueError("visual intent shot IDs must be unique")
         return self
+
+
+class VisualIntentPatch(BaseModel):
+    """Return only the high-level shots named by a beat-local repair request."""
+
+    shots: list[ShotSpec] = Field(min_length=1, max_length=6)
+
+    @model_validator(mode="after")
+    def validate_shot_ids(self) -> Self:
+        shot_ids = [shot.shot_id for shot in self.shots]
+        if len(shot_ids) != len(set(shot_ids)):
+            raise ValueError("visual intent patch shot IDs must be unique")
+        return self

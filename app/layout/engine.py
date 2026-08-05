@@ -10,6 +10,7 @@ from app.domain.layout import (
     LayoutPlan,
     Viewport,
 )
+from app.domain.repair import RepairPlan
 from app.domain.visual_document import (
     ObjectLifecycle,
     ObjectState,
@@ -393,6 +394,85 @@ class HierarchicalLayoutEngine:
             max(canvas_width, supplemental_width),
             height + self.DEFAULT_GAP + supplemental_height,
         )
+
+    def repair(
+        self,
+        document: VisualDocument,
+        assets: ResolvedAssetSet,
+        viewport: Viewport,
+        previous: LayoutPlan,
+        repair: RepairPlan,
+    ) -> LayoutPlan:
+        """Apply a bounded geometry correction without rebuilding upstream state."""
+
+        candidate = self.layout(document, assets, viewport)
+        codes = set(repair.finding_codes)
+        grow = bool(codes.intersection({
+            "canvas_underused",
+            "rendered_canvas_underused",
+            "rendered_effective_font_too_small",
+        }))
+        shrink = bool(codes.intersection({
+            "object_clipped",
+            "layout_violation",
+            "rendered_canvas_overfilled",
+            "rendered_safe_area_clipped",
+        }))
+        if not grow and not shrink:
+            return candidate
+        factor = 1.12 if grow else 0.90
+        repaired = previous.model_copy(deep=True)
+        center_x = repaired.viewport.width / 2
+        center_y = repaired.viewport.height / 2
+        target_state_ids = {
+            state.state_id
+            for state in document.states
+            if state.beat_id in repair.beat_ids
+        }
+        for state_id, root in repaired.state_roots.items():
+            if target_state_ids and state_id not in target_state_ids:
+                continue
+            for child in root.children:
+                self._scale_laid_out_node(child, factor, center_x, center_y)
+        return repaired.model_copy(
+            update={
+                "diagnostics": [
+                    item for item in candidate.diagnostics
+                    if not any(code in item for code in repair.finding_codes)
+                ]
+            }
+        )
+
+    @classmethod
+    def _scale_laid_out_node(
+        cls,
+        node: LaidOutNode,
+        factor: float,
+        center_x: float,
+        center_y: float,
+    ) -> None:
+        """Scale absolute node geometry around the viewport center."""
+
+        node_center_x = node.box.x + node.box.width / 2
+        node_center_y = node.box.y + node.box.height / 2
+        width = node.box.width * factor
+        height = node.box.height * factor
+        scaled_center_x = center_x + (node_center_x - center_x) * factor
+        scaled_center_y = center_y + (node_center_y - center_y) * factor
+        node.box = LayoutBox(
+            x=scaled_center_x - width / 2,
+            y=scaled_center_y - height / 2,
+            width=width,
+            height=height,
+            rotation=node.box.rotation,
+        )
+        for child in node.children:
+            cls._scale_laid_out_node(
+                child,
+                factor,
+                center_x,
+                center_y,
+            )
 
     def _layout_graph(self, children: list[_MeasuredNode]) -> tuple[float, float]:
         """Lay out graph vertices on a circle and retain connector overlays."""

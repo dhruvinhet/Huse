@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from hashlib import sha256
 from inspect import signature
 from pathlib import Path
 import re
@@ -44,6 +45,7 @@ from app.domain.lesson import LessonPlan
 from app.domain.narration import NarrationPhrase, NarrationPlan
 from app.domain.pedagogy import PedagogyPlan
 from app.domain.quality import EvaluationDecision, QualityReport
+from app.domain.repair import RepairPlan, RepairStage
 from app.domain.rendering import CompositionJob, RenderJob
 from app.domain.storyboard import ShotPlan, Storyboard
 from app.knowledge import InMemoryVisualKnowledgeBase
@@ -63,6 +65,7 @@ from app.quality import (
     DeterministicQualityEvaluator,
     EducationalQualityEvaluator,
     QualityPolicy,
+    QualityRepairPlanner,
     QualityReviewPolicy,
     RenderedFrameQualityEvaluator,
     VisualQualityEvaluator,
@@ -112,6 +115,7 @@ class V2PipelineRunner:
         asset_query_planner: SemanticAssetQueryPlanner | None = None,
         storyboard_reviewer: QualityEvaluator | None = None,
         review_policy: QualityReviewPolicy | None = None,
+        repair_planner: QualityRepairPlanner | None = None,
     ) -> None:
         """Configure replaceable ports and production defaults."""
 
@@ -169,6 +173,7 @@ class V2PipelineRunner:
         self._multimodal = multimodal_evaluator
         self._storyboard_reviewer = storyboard_reviewer
         self._review_policy = review_policy or QualityReviewPolicy()
+        self._repair_planner = repair_planner or QualityRepairPlanner()
         self._max_repairs = policy.maximum_repair_attempts
         self._manifest_builder = PhraseManifestBuilder()
         self._attention = attention_planner or AttentionPlanningEngine()
@@ -180,6 +185,8 @@ class V2PipelineRunner:
         self.stage_timings: dict[str, float] = {}
         self.last_quality_report: QualityReport | None = None
         self.last_artifacts: dict[str, object] = {}
+        self.repair_history: list[RepairPlan] = []
+        self._pending_repair: RepairPlan | None = None
         self.last_execution_time = 0.0
         self._checkpoints: ArtifactCheckpointStore | None = None
         self._last_artifact_id: str | None = None
@@ -201,6 +208,8 @@ class V2PipelineRunner:
         self.stage_timings.clear()
         self.last_quality_report = None
         self.last_artifacts.clear()
+        self.repair_history.clear()
+        self._pending_repair = None
         self._debug.start_run(request.topic)
         self._checkpoints = ArtifactCheckpointStore(
             self._working_path(
@@ -210,6 +219,15 @@ class V2PipelineRunner:
         self._last_artifact_id = None
         started = perf_counter()
         narration_cache: dict[str, NarrationPlan] = {}
+        assets_cache: dict[str, object] = {}
+        audio_cache: dict[str, object] = {}
+        alignment_cache: dict[str, object] = {}
+        document_cache: dict[str, object] = {}
+        layout_cache: dict[str, object] = {}
+        motion_cache: dict[str, object] = {}
+        camera_cache: dict[str, object] = {}
+        frames_cache: dict[str, object] = {}
+        last_frames: object | None = None
         error: Exception | None = None
         status = "failed"
         try:
@@ -350,6 +368,13 @@ class V2PipelineRunner:
                 )
 
             for attempt in range(self._max_repairs + 1):
+                active_repair = self._pending_repair
+                invalidated = set(
+                    active_repair.invalidated_stages
+                    if active_repair is not None
+                    else []
+                )
+                self._pending_repair = None
                 storyboard = self._asset_query_planner.enrich(
                     storyboard,
                     lesson,
@@ -421,6 +446,7 @@ class V2PipelineRunner:
                 self._record("v2/storyboard/accepted.json", storyboard)
 
                 narration_key = self._narration_cache_key(storyboard)
+                storyboard_key = self._artifact_cache_key(storyboard)
                 # Narration and asset resolution depend on the accepted
                 # storyboard but not on one another.  Run them together so a
                 # visual-only repair does not wait behind another model call.
@@ -429,7 +455,10 @@ class V2PipelineRunner:
                     thread_name_prefix="v2-post-storyboard",
                 ) as executor:
                     narration_future = None
-                    if narration_key in narration_cache:
+                    if (
+                        narration_key in narration_cache
+                        and RepairStage.NARRATION not in invalidated
+                    ):
                         narration = narration_cache[narration_key].model_copy(
                             deep=True
                         )
@@ -448,56 +477,169 @@ class V2PipelineRunner:
                                 request.target_duration,
                             ),
                         )
-                    assets_future = executor.submit(
-                        self._stage,
-                        "Resolve Semantic Assets",
-                        lambda: self._assets.resolve(storyboard),
-                    )
+                    assets_future = None
+                    if (
+                        storyboard_key in assets_cache
+                        and RepairStage.ASSETS not in invalidated
+                    ):
+                        assets = assets_cache[storyboard_key]
+                        logger.info("Reusing semantic assets for unchanged storyboard.")
+                    else:
+                        assets_future = executor.submit(
+                            self._stage,
+                            "Resolve Semantic Assets",
+                            lambda: self._assets.resolve(storyboard),
+                        )
                     if narration_future is not None:
                         narration = narration_future.result()
                         narration_cache[narration_key] = narration.model_copy(
                             deep=True
                         )
-                    assets = assets_future.result()
+                    if assets_future is not None:
+                        assets = assets_future.result()
+                        assets_cache[storyboard_key] = assets
                 self._validate_narration(storyboard, narration)
                 self._record("v2/narration.json", narration)
                 self._record("v2/assets.json", assets)
-                audio = self._stage(
-                    "Generate Narration",
-                    lambda: self._speech.synthesize(narration, request.voice),
-                )
-                alignment = self._stage(
-                    "Align Phrases",
-                    lambda: self._aligner.align(narration, audio),
-                )
+                audio_key = self._artifact_cache_key(narration, request.voice)
+                if audio_key in audio_cache and RepairStage.AUDIO not in invalidated:
+                    audio = audio_cache[audio_key]
+                    logger.info("Reusing synthesized narration audio.")
+                else:
+                    audio = self._stage(
+                        "Generate Narration",
+                        lambda: self._speech.synthesize(narration, request.voice),
+                    )
+                    audio_cache[audio_key] = audio
+                alignment_key = self._artifact_cache_key(narration, audio)
+                if (
+                    alignment_key in alignment_cache
+                    and RepairStage.AUDIO not in invalidated
+                ):
+                    alignment = alignment_cache[alignment_key]
+                    logger.info("Reusing phrase alignment.")
+                else:
+                    alignment = self._stage(
+                        "Align Phrases",
+                        lambda: self._aligner.align(narration, audio),
+                    )
+                    alignment_cache[alignment_key] = alignment
                 self._record("v2/audio_alignment.json", alignment)
-                document = self._stage(
-                    "Build Persistent States",
-                    lambda: self._state.materialize(storyboard),
-                )
+                if (
+                    storyboard_key in document_cache
+                    and RepairStage.STATE not in invalidated
+                ):
+                    document = document_cache[storyboard_key]
+                    logger.info("Reusing materialized visual states.")
+                else:
+                    document = self._stage(
+                        "Build Persistent States",
+                        lambda: self._state.materialize(storyboard),
+                    )
+                    document_cache[storyboard_key] = document
                 self._record("v2/visual_document.json", document)
                 viewport = request.output.model_dump(
                     include={"width", "height"}
                 )
                 from app.domain.layout import Viewport
 
-                layout = self._stage(
-                    "Solve Layout",
-                    lambda: self._layout.layout(
-                        document,
-                        assets,
-                        Viewport(**viewport),
-                    ),
+                viewport_model = Viewport(**viewport)
+                layout_key = self._artifact_cache_key(
+                    document,
+                    assets,
+                    viewport_model,
                 )
+                if layout_key in layout_cache and RepairStage.LAYOUT not in invalidated:
+                    layout = layout_cache[layout_key]
+                    logger.info("Reusing solved layout.")
+                else:
+                    previous_layout = layout_cache.get(layout_key)
+                    layout_repair = getattr(self._layout, "repair", None)
+                    if (
+                        active_repair is not None
+                        and active_repair.owner_stage is RepairStage.LAYOUT
+                        and previous_layout is not None
+                        and callable(layout_repair)
+                    ):
+                        layout = self._stage(
+                            "Repair Layout",
+                            lambda: layout_repair(
+                                document,
+                                assets,
+                                viewport_model,
+                                previous_layout,
+                                active_repair,
+                            ),
+                        )
+                    else:
+                        layout = self._stage(
+                            "Solve Layout",
+                            lambda: self._layout.layout(
+                                document,
+                                assets,
+                                viewport_model,
+                            ),
+                        )
+                    layout_cache[layout_key] = layout
                 self._record("v2/layout.json", layout)
-                motion = self._stage(
-                    "Plan Motion",
-                    lambda: self._motion.plan(storyboard, layout, alignment),
-                )
-                camera = self._stage(
-                    "Plan Camera",
-                    lambda: self._camera.plan(storyboard, layout, alignment),
-                )
+                motion_key = self._artifact_cache_key(storyboard, layout, alignment)
+                if motion_key in motion_cache and RepairStage.MOTION not in invalidated:
+                    motion = motion_cache[motion_key]
+                    logger.info("Reusing motion plan.")
+                else:
+                    previous_motion = motion_cache.get(motion_key)
+                    motion_repair = getattr(self._motion, "repair", None)
+                    if (
+                        active_repair is not None
+                        and active_repair.owner_stage is RepairStage.MOTION
+                        and previous_motion is not None
+                        and callable(motion_repair)
+                    ):
+                        motion = self._stage(
+                            "Repair Motion",
+                            lambda: motion_repair(
+                                storyboard,
+                                layout,
+                                alignment,
+                                previous_motion,
+                                active_repair,
+                            ),
+                        )
+                    else:
+                        motion = self._stage(
+                            "Plan Motion",
+                            lambda: self._motion.plan(storyboard, layout, alignment),
+                        )
+                    motion_cache[motion_key] = motion
+                camera_key = self._artifact_cache_key(storyboard, layout, alignment)
+                if camera_key in camera_cache and RepairStage.CAMERA not in invalidated:
+                    camera = camera_cache[camera_key]
+                    logger.info("Reusing camera plan.")
+                else:
+                    previous_camera = camera_cache.get(camera_key)
+                    camera_repair = getattr(self._camera, "repair", None)
+                    if (
+                        active_repair is not None
+                        and active_repair.owner_stage is RepairStage.CAMERA
+                        and previous_camera is not None
+                        and callable(camera_repair)
+                    ):
+                        camera = self._stage(
+                            "Repair Camera",
+                            lambda: camera_repair(
+                                storyboard,
+                                layout,
+                                alignment,
+                                previous_camera,
+                                active_repair,
+                            ),
+                        )
+                    else:
+                        camera = self._stage(
+                            "Plan Camera",
+                            lambda: self._camera.plan(storyboard, layout, alignment),
+                        )
+                    camera_cache[camera_key] = camera
                 self._record("v2/motion.json", motion)
                 self._record("v2/camera.json", camera)
                 report = self._quality.evaluate(
@@ -549,21 +691,53 @@ class V2PipelineRunner:
                     / "frames"
                     / request.run_id
                 ).as_posix()
-                frames = self._stage(
-                    "Render Semantic Frames",
-                    lambda: self._renderer.render(
-                        RenderJob(
-                            run_id=request.run_id,
-                            document=document,
-                            assets=assets,
-                            layout=layout,
-                            motion=motion,
-                            camera=camera,
-                            manifest=manifest,
-                            output_folder=frames_folder,
-                        )
-                    ),
+                render_job = RenderJob(
+                    run_id=request.run_id,
+                    document=document,
+                    assets=assets,
+                    layout=layout,
+                    motion=motion,
+                    camera=camera,
+                    manifest=manifest,
+                    output_folder=frames_folder,
                 )
+                frames_key = self._artifact_cache_key(render_job)
+                if frames_key in frames_cache and RepairStage.RENDERER not in invalidated:
+                    frames = frames_cache[frames_key]
+                    logger.info("Reusing rendered frame sequence.")
+                else:
+                    previous_frames = frames_cache.get(frames_key) or last_frames
+                    render_repair = getattr(self._renderer, "repair", None)
+                    if (
+                        active_repair is not None
+                        and active_repair.owner_stage in {
+                            RepairStage.LAYOUT,
+                            RepairStage.MOTION,
+                            RepairStage.CAMERA,
+                            RepairStage.RENDERER,
+                        }
+                        and previous_frames is not None
+                        and callable(render_repair)
+                        and bool(
+                            active_repair.beat_ids
+                            or active_repair.frame_numbers
+                        )
+                    ):
+                        frames = self._stage(
+                            "Repair Rendered Frames",
+                            lambda: render_repair(
+                                render_job,
+                                previous_frames,
+                                active_repair,
+                            ),
+                        )
+                    else:
+                        frames = self._stage(
+                            "Render Semantic Frames",
+                            lambda: self._renderer.render(render_job),
+                        )
+                    frames_cache[frames_key] = frames
+                last_frames = frames
                 rendered_report = self._stage(
                     "Check Rendered Pixels",
                     lambda: RenderedFrameQualityEvaluator().evaluate(
@@ -582,10 +756,16 @@ class V2PipelineRunner:
                     rendered_report,
                 )
                 if rendered_report.decision is not EvaluationDecision.PASS:
-                    raise QualityGateError(
-                        "rendered frame quality failed: "
-                        f"{[item.code for item in rendered_report.findings]}"
+                    storyboard = self._repair_or_raise(
+                        lesson,
+                        storyboard,
+                        rendered_report,
+                        strategies,
+                        template_matches,
+                        attempt,
+                        pedagogy,
                     )
+                    continue
                 self.last_quality_report = rendered_report
                 multimodal_reasons = self._review_policy.rendered_reasons(
                     report,
@@ -678,6 +858,23 @@ class V2PipelineRunner:
             raise QualityGateError(
                 f"quality gate failed: {[item.code for item in report.findings]}"
             )
+        repair_plan = self._repair_planner.plan(report)
+        if any(
+            prior.fingerprint == repair_plan.fingerprint
+            for prior in self.repair_history
+        ):
+            raise QualityGateError(
+                "quality repair made no progress: "
+                f"fingerprint={repair_plan.fingerprint}, "
+                f"stage={repair_plan.owner_stage.value}, "
+                f"findings={repair_plan.finding_codes}"
+            )
+        self.repair_history.append(repair_plan)
+        self._pending_repair = repair_plan
+        self._record(
+            f"v2/quality/repair_plan_{len(self.repair_history):02d}.json",
+            repair_plan,
+        )
         repair_targets = {
             item.repair_target
             for item in report.findings
@@ -734,22 +931,37 @@ class V2PipelineRunner:
                 f"{[item.code for item in report.findings]}"
             )
         repair = getattr(self._storyboard_planner, "repair", None)
+        repair_beats = getattr(self._storyboard_planner, "repair_beats", None)
         if not callable(repair):
             raise QualityGateError(
                 "storyboard planner does not support targeted repair"
             )
         try:
-            repaired = self._stage(
-                "Repair Storyboard",
-                lambda: repair(
-                    lesson,
-                    storyboard,
-                    report,
-                    strategies,
-                    templates,
-                ),
-                recoverable_exceptions=(StructuredAgentError,),
-            )
+            if callable(repair_beats) and repair_plan.beat_ids:
+                repaired = self._stage(
+                    "Repair Storyboard Beats",
+                    lambda: repair_beats(
+                        lesson,
+                        storyboard,
+                        report,
+                        strategies,
+                        templates,
+                        repair_plan.beat_ids,
+                    ),
+                    recoverable_exceptions=(StructuredAgentError,),
+                )
+            else:
+                repaired = self._stage(
+                    "Repair Storyboard",
+                    lambda: repair(
+                        lesson,
+                        storyboard,
+                        report,
+                        strategies,
+                        templates,
+                    ),
+                    recoverable_exceptions=(StructuredAgentError,),
+                )
         except StructuredAgentError:
             logger.warning(
                 "Provider storyboard repair was unusable; compiling the lesson "
@@ -991,6 +1203,25 @@ class V2PipelineRunner:
         )
         expected = target_duration * 2.30
         return words >= expected
+
+    @staticmethod
+    def _artifact_cache_key(*artifacts: object) -> str:
+        """Hash immutable stage inputs for safe in-run artifact reuse."""
+
+        payload = []
+        for artifact in artifacts:
+            dump = getattr(artifact, "model_dump", None)
+            payload.append(
+                dump(mode="json") if callable(dump) else artifact
+            )
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        return sha256(encoded).hexdigest()
 
     @staticmethod
     def _narration_cache_key(storyboard: Storyboard) -> str:
