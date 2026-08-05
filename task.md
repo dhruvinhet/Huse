@@ -390,15 +390,15 @@ Acceptance criteria:
 Primary files: package `__init__.py` modules, dependency metadata, settings,
 `PROJECT_HANDOFF.md`, and setup/run documentation.
 
-- [ ] Replace eager imports of optional audio/provider/multimodal dependencies
+- [x] Replace eager imports of optional audio/provider/multimodal dependencies
   with lazy adapters or explicit extras.
-- [ ] Document minimal, audio, provider, multimodal, and development install
+- [x] Document minimal, audio, provider, multimodal, and development install
   profiles and their failure messages.
-- [ ] Change production-oriented debug defaults and document how to enable full
+- [x] Change production-oriented debug defaults and document how to enable full
   artifacts.
-- [ ] Update stale handoff claims that templates are not instantiated and that
+- [x] Update stale handoff claims that templates are not instantiated and that
   all camera behavior is FIT-only.
-- [ ] Add a clean-environment import/startup test for the minimal package.
+- [x] Add a clean-environment import/startup test for the minimal package.
 
 Acceptance criteria:
 

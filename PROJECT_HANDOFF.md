@@ -185,7 +185,11 @@ The latest changes added:
 - Educational-quality scoring
 - Expanded regression tests
 
-Some of these features are present in the architecture but are not yet active enough in real output. For example, the latest real run produced zero word timings, matched templates without directly instantiating them, used no semantic illustrations, and allowed every camera cue to remain `fit`.
+These earlier audit gaps are now closed in the implementation: Edge-TTS is
+requested in word-boundary mode with per-word provenance, compatible reviewed
+templates are instantiated authoritatively, generated semantic diagrams have a
+visible full-diagram contract, and geometry-backed focus/zoom/pan/track cues are
+validated while FIT/HOLD remain explicit exemptions.
 
 ## 4. Current feature inventory
 
@@ -479,7 +483,8 @@ OUTPUT_DIR=outputs
 TEMP_DIR=temp
 LOG_LEVEL=INFO
 FFMPEG_PATH=
-DEBUG_ARTIFACTS=true
+DEBUG_ARTIFACTS=false
+DEBUG_FRAME_TRACE_FULL=false
 DEBUG_DIR=outputs/debug
 PIPELINE_VERSION=v2
 V2_MAX_REPAIR_ATTEMPTS=2
@@ -727,10 +732,13 @@ The most recently audited real run generated a 103.68-second video in approximat
 Observed facts:
 
 - The quality report returned `1.0` despite visible text truncation and a crowded summary.
-- Thirteen templates matched, but the final storyboard still used mostly generic components, matrix cells, and connectors.
+- Historical audit note: template matches were once advisory. They are now
+  capability-gated, parameterized, and instantiated by `TemplateCompiler`.
 - No semantic illustration objects reached the storyboard.
 - Audio alignment contained seven phrase intervals but zero word intervals.
-- Every camera operation was `fit`.
+- Historical audit note: an early run used only FIT. Current camera planning
+  emits fit, hold, focus, zoom, pan, and track cues from geometry and validates
+  meaningful crop change and final focal scale.
 - Representative frames used roughly 1.2% to 9.4% of pixels as meaningful ink.
 - The summary tried to compress too much historical content into one view.
 
@@ -748,9 +756,11 @@ Each shot should define:
 - Required screen time
 - Continuity with the previous shot
 
-### Priority 2: make templates executable
+### Completed: executable templates
 
-Template matches are currently advisory inputs to Gemini. A selected template should directly instantiate renderer-ready semantic structure, while Gemini supplies only validated parameters.
+Template matches are authoritative compiler inputs. Selected templates
+instantiate renderer-ready semantic structure from validated, provenance-aware
+parameters; model output never supplies low-level renderer objects.
 
 For an encoder-decoder lesson, executable primitives should include token sequences, an encoder stack, hidden states, compression, a context bottleneck, decoder recurrence, probability bars, training/inference lanes, and an attention heatmap.
 
@@ -770,62 +780,51 @@ The post-render gate should detect:
 - Visually static intervals
 - Abrupt camera changes
 
-### Priority 4: implement authentic whiteboard motion
+### Implemented: semantic whiteboard motion
 
-Many strategies are still opacity changes or rectangular masks.
+Motion includes geometry-derived connector/path travel, typed semantic action
+trajectories, stroke/glyph reveals, marker feedback, highlights, erasures,
+chart/matrix sequencing, and state-delta-driven transformations.
 
-Needed improvements include:
+### Implemented: active word synchronization
 
-- SVG path-length stroke drawing
-- Glyph-level handwriting
-- Marker movement along the active path
-- Natural drawing order
-- Highlighter and eraser paths
-- Object morphing
-- Token motion along connectors
-- Meaningful animation of charts and matrices
-
-### Priority 5: make word synchronization active
-
-Edge-TTS currently defaults to sentence boundaries unless explicitly configured for word boundaries. Real word timing must be captured, validated, and connected to meaningful narration keywords.
+Edge-TTS is explicitly configured for `WordBoundary` events with per-word
+provider/estimated provenance and confidence.
 
 Visual actions should align with semantic words such as “encoder,” “compressed,” “bottleneck,” “decoder,” and “attention,” rather than being uniformly distributed.
 
-### Priority 6: make camera planning authoritative
+### Implemented: authoritative camera planning
 
-The LLM should express focus intent, but the deterministic camera planner should choose the final operation from actual geometry. It must override unusable all-`fit` plans and reject framing that makes text too small.
+The deterministic camera planner chooses fit, hold, focus, zoom, pan, and track
+from actual geometry. Non-FIT/HOLD moves retain focal edges and must exceed a
+configurable visible-change gate.
 
 ### Priority 7: create a simplified recap composition
 
 The summary should construct a new simplified visual instead of shrinking every previous object onto one screen.
 
-### Priority 8: reduce rendering and composition cost
+### Implemented: bounded rendering and composition
 
-After visual quality improves:
-
-- Render only changing/key frames.
-- Pipe frames directly to FFmpeg.
-- Let FFmpeg hold or duplicate static intervals.
-- Cache vector layers.
-- Use hardware-accelerated encoding when configured.
-- Cache stable AI artifacts and templates.
+Production rendering caches content/style/layout-keyed layers, rebuilds
+semantic keyframes/deltas, streams raw RGB frames to FFmpeg, retains bounded
+diagnostic samples, and records keyframe/cache/memory/throughput metrics. PNG
+sequences remain an explicit golden/debug option.
 
 ## 15. Recommended first contribution
 
-The strongest first task for a new contributor is a **final-frame visual inspector**.
+The strongest next task is release-gate maintenance and benchmark calibration.
 
 Suggested bounded scope:
 
-1. Sample the final rendered frame near the end of every beat.
-2. Record final on-screen object boxes and font sizes after camera/view transforms.
-3. Detect clipping, truncation, low occupancy, excessive density, and connector crossings.
-4. Produce structured `QualityFinding` records.
-5. Add fixture images for known good and known broken frames.
-6. Make the pipeline fail or request bounded repair when a serious defect is detected.
+1. Run the versioned offline and approved provider benchmark profiles.
+2. Review deterministic gate deltas and renderer runtime targets.
+3. Keep model-judged/novelty signals reported until repeatability is measured.
+4. Require an owner and expiry for every release-gate waiver.
 
-This task is valuable because the current quality score can report perfection for visibly weak frames. Fixing that feedback loop will make every later renderer and planner improvement measurable.
+Deterministic final-frame inspection and structured pixel findings are active;
+future work should tune thresholds against benchmark evidence.
 
-After that, implement the shot planner and executable visual templates.
+Shot planning and executable visual templates are active.
 
 ## 16. Definition of done for future visual changes
 

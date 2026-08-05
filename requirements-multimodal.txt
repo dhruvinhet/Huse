@@ -1,0 +1,2 @@
+-r requirements-provider.txt
+Pillow==12.3.0

@@ -1,17 +1,26 @@
 """FFmpeg composition of PNG frames and narration into an MP4 file."""
 
+from __future__ import annotations
+
 import shutil
 import subprocess
 from pathlib import Path
 
-import cv2
+try:
+    import cv2
+except ModuleNotFoundError:  # pragma: no cover - clean install behavior
+    cv2 = None  # type: ignore[assignment]
 from loguru import logger
-from mutagen.mp4 import MP4
+try:
+    from mutagen.mp4 import MP4
+except ModuleNotFoundError:  # pragma: no cover - clean install behavior
+    MP4 = None  # type: ignore[assignment,misc]
 
 from app.config.settings import PROJECT_ROOT, settings
 from app.models.audio import AudioMetadata
 from app.models.video_manifest import VideoManifest
 from app.utils.debug_recorder import DebugRecorder
+from app.optional import missing_extra
 
 
 class FFmpegNotFoundError(RuntimeError):
@@ -35,6 +44,12 @@ class VideoComposer:
     def __init__(self, debug_recorder: DebugRecorder | None = None) -> None:
         """Store the optional recorder used for composition diagnostics."""
 
+        if cv2 is None or MP4 is None:
+            raise missing_extra(
+                "Verified video composition",
+                "requirements-audio.txt",
+                "opencv-python and mutagen",
+            )
         self._debug_recorder = debug_recorder
 
     def compose(

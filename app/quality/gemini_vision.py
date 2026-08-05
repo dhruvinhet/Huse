@@ -1,16 +1,32 @@
 """Provider-aware multimodal frame evaluation client."""
 
+from __future__ import annotations
+
 import base64
 import mimetypes
 from pathlib import Path
 
-import httpx
-from google import genai
-from google.genai import errors as genai_errors
-from google.genai import types
+try:
+    import httpx
+except ModuleNotFoundError:  # pragma: no cover - clean install behavior
+    httpx = None  # type: ignore[assignment]
+try:
+    from google import genai
+    from google.genai import errors as genai_errors
+    from google.genai import types
+except ModuleNotFoundError:  # pragma: no cover - clean install behavior
+    genai = None  # type: ignore[assignment]
+    types = None  # type: ignore[assignment]
+
+    class _MissingGenaiErrors:
+        class APIError(Exception):
+            pass
+
+    genai_errors = _MissingGenaiErrors()  # type: ignore[assignment]
 from PIL import Image
 
 from app.config.settings import settings
+from app.optional import missing_extra
 from app.services.gemini_client import (
     GeminiAPIError,
     GeminiConfigurationError,
@@ -50,6 +66,12 @@ class GeminiVisionClient:
             )
 
         if self.PROVIDER == "nvidia":
+            if httpx is None:
+                raise missing_extra(
+                    "NVIDIA multimodal evaluation",
+                    "requirements-multimodal.txt",
+                    "httpx",
+                )
             if not getattr(settings, "NVIDIA_API_KEY", "").strip():
                 raise GeminiConfigurationError("NVIDIA_API_KEY is required")
             self._client = None
@@ -58,6 +80,12 @@ class GeminiVisionClient:
         api_key = settings.GEMINI_API_KEY.strip()
         if not api_key:
             raise GeminiConfigurationError("GEMINI_API_KEY is required")
+        if genai is None or types is None:
+            raise missing_extra(
+                "Gemini multimodal evaluation",
+                "requirements-multimodal.txt",
+                "google-genai",
+            )
         self._client = genai.Client(
             api_key=api_key,
             http_options=types.HttpOptions(timeout=None),

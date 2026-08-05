@@ -1,0 +1,6 @@
+pydantic==2.13.4
+python-dotenv==1.2.2
+loguru==0.7.3
+Pillow==12.3.0
+svgwrite==1.4.3
+resvg_py==0.3.4

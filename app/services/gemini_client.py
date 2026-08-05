@@ -1,14 +1,30 @@
 """Provider-aware text-generation client for Gemini and NVIDIA APIs."""
 
+from __future__ import annotations
+
 from time import sleep
 
-import httpx
-from google import genai
-from google.genai import errors as genai_errors
-from google.genai import types
+try:
+    import httpx
+except ModuleNotFoundError:  # pragma: no cover - clean install behavior
+    httpx = None  # type: ignore[assignment]
+try:
+    from google import genai
+    from google.genai import errors as genai_errors
+    from google.genai import types
+except ModuleNotFoundError:  # pragma: no cover - clean install behavior
+    genai = None  # type: ignore[assignment]
+    types = None  # type: ignore[assignment]
+
+    class _MissingGenaiErrors:
+        class APIError(Exception):
+            pass
+
+    genai_errors = _MissingGenaiErrors()  # type: ignore[assignment]
 from loguru import logger
 
 from app.config.settings import settings
+from app.optional import missing_extra
 
 
 class GeminiClientError(RuntimeError):
@@ -79,6 +95,12 @@ class GeminiClient:
             )
 
         if self.PROVIDER == "nvidia":
+            if httpx is None:
+                raise missing_extra(
+                    "NVIDIA planning",
+                    "requirements-provider.txt",
+                    "httpx",
+                )
             api_key = getattr(settings, "NVIDIA_API_KEY", "").strip()
             if not api_key:
                 raise GeminiConfigurationError(
@@ -91,6 +113,12 @@ class GeminiClient:
         if not api_key:
             raise GeminiConfigurationError(
                 "GEMINI_API_KEY is missing; set it in the environment or .env file."
+            )
+        if genai is None or types is None:
+            raise missing_extra(
+                "Gemini planning",
+                "requirements-provider.txt",
+                "google-genai",
             )
 
         self._client = genai.Client(

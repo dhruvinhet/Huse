@@ -6,9 +6,7 @@ from app.quality.multimodal import (
     MultimodalFrameEvaluator,
     VisionLanguageClient,
 )
-from app.quality.gemini_vision import GeminiVisionClient
 from app.quality.policy import QualityPolicy, QualityReviewPolicy
-from app.quality.storyboard_critic import GeminiStoryboardCritic
 from app.quality.educational import EducationalQualityEvaluator
 from app.quality.visual import VisualQualityEvaluator
 from app.quality.rendered import RenderedFrameQualityEvaluator
@@ -28,3 +26,17 @@ __all__ = [
     "RenderedFrameQualityEvaluator",
     "QualityRepairPlanner",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """Load provider-backed critics only when explicitly enabled."""
+
+    if name == "GeminiVisionClient":
+        from app.quality.gemini_vision import GeminiVisionClient
+
+        return GeminiVisionClient
+    if name == "GeminiStoryboardCritic":
+        from app.quality.storyboard_critic import GeminiStoryboardCritic
+
+        return GeminiStoryboardCritic
+    raise AttributeError(name)

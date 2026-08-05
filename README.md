@@ -25,8 +25,8 @@ Request
   -> Hierarchical Constraint Layout
   -> Semantic Motion, Attention, and Camera
   -> Deterministic and Optional Multimodal Quality Gates
-  -> Semantic PNG Frames
-  -> Existing Verified FFmpeg Composer
+  -> Semantic Keyframes and Raw-Frame Stream
+  -> Verified FFmpeg Encoder/Composer
 ```
 
 The renderer never infers educational meaning, and AI planners never emit pixel coordinates.
@@ -97,7 +97,8 @@ OUTPUT_DIR=outputs
 TEMP_DIR=temp
 LOG_LEVEL=INFO
 FFMPEG_PATH=
-DEBUG_ARTIFACTS=true
+DEBUG_ARTIFACTS=false
+DEBUG_FRAME_TRACE_FULL=false
 DEBUG_DIR=outputs/debug
 PIPELINE_VERSION=v2
 V2_MAX_REPAIR_ATTEMPTS=2
@@ -174,6 +175,20 @@ longer share the old rounded-rectangle fallback.
 
 The prompt asks for a topic and writes `outputs/final_video.mp4`.
 
+### Install profiles
+
+- `requirements-minimal.txt`: domain, planning, layout, and deterministic
+  rendering contracts.
+- `requirements-audio.txt`: Edge-TTS, MP3 inspection, and verified media
+  composition.
+- `requirements-provider.txt`: Gemini/NVIDIA planning transports.
+- `requirements-multimodal.txt`: optional image-based quality review.
+- `requirements-dev.txt`: the complete application plus test tooling.
+
+`requirements.txt` remains the complete runtime install. Requesting an adapter
+whose profile is absent raises an error naming the exact requirements file to
+install; core domain and planning imports do not load provider or TTS SDKs.
+
 ## Test
 
 ```powershell
@@ -194,7 +209,12 @@ Generated files are written to `docs/schemas/`.
 
 ## Debugging
 
-With `DEBUG_ARTIFACTS=true`, each real run records inputs, validated AI artifacts, narration and alignment, assets, visual states, layout, motion, camera, quality reports, frame traces, FFmpeg commands, stream verification, errors, and stage timings under `outputs/debug/runs/`.
+Debug artifacts are off by default. With `DEBUG_ARTIFACTS=true`, each real run
+records inputs, validated AI artifacts, narration and alignment, assets, visual
+states, layout, motion, camera, quality reports, event/keyframe traces, bounded
+frame samples, FFmpeg commands, stream verification, errors, and stage timings
+under `outputs/debug/runs/`. Set `DEBUG_FRAME_TRACE_FULL=true` only when a
+per-frame trace is explicitly needed.
 
 Inspect the latest V1 debug report:
 

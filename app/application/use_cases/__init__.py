@@ -1,5 +1,11 @@
-"""Public application use cases."""
+"""Public use cases, loaded only when requested."""
 
-from app.application.use_cases.generate_video import VideoGenerationService
+
+def __getattr__(name: str) -> object:
+    if name != "VideoGenerationService":
+        raise AttributeError(name)
+    from app.application.use_cases.generate_video import VideoGenerationService
+    return VideoGenerationService
+
 
 __all__ = ["VideoGenerationService"]

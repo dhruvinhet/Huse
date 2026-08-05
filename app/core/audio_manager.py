@@ -1,5 +1,7 @@
 """Narration generation through the Edge-TTS service."""
 
+from __future__ import annotations
+
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 import hashlib
@@ -10,13 +12,20 @@ import shutil
 import subprocess
 from typing import BinaryIO
 
-import edge_tts
+try:
+    import edge_tts
+except ModuleNotFoundError:  # pragma: no cover - clean install behavior
+    edge_tts = None  # type: ignore[assignment]
 from loguru import logger
-from mutagen.mp3 import MP3
+try:
+    from mutagen.mp3 import MP3
+except ModuleNotFoundError:  # pragma: no cover - clean install behavior
+    MP3 = None  # type: ignore[assignment,misc]
 
 from app.config.settings import PROJECT_ROOT, settings
 from app.models.audio import AudioMetadata, AudioWordTiming, SceneAudio
 from app.models.script import Script
+from app.optional import missing_extra
 from app.utils.debug_recorder import DebugRecorder
 
 
@@ -43,6 +52,13 @@ class AudioManager:
         voice: str = "en-US-AriaNeural",
     ) -> AudioMetadata:
         """Generate narration audio and return validated MP3 metadata."""
+
+        if edge_tts is None or MP3 is None:
+            raise missing_extra(
+                "Narration generation",
+                "requirements-audio.txt",
+                "edge-tts and mutagen",
+            )
 
         normalized_voice = voice.strip()
         if not normalized_voice:

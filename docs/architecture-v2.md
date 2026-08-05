@@ -1236,7 +1236,9 @@ Before V2 becomes the default, the repository should contain:
 - V1-to-V2 migration and rollback guide.
 - Benchmark suite and human-review rubric.
 
-The current README is outdated relative to the implemented V1 pipeline. It should be revised as a separate documentation task when the first V2 contracts land, not as part of this architecture-only change.
+The README and handoff now describe the implemented V2 compiler, executable
+templates, authoritative camera planning, streamed renderer, quality gates,
+and optional install profiles. Keep them synchronized with contract changes.
 
 ## 23. Debugging and observability contract
 

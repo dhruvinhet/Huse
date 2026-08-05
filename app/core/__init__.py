@@ -1,44 +1,36 @@
-"""Core application components."""
+"""Core adapters with optional media/provider modules loaded on demand."""
 
-from app.core.animation_timeline_builder import AnimationTimelineBuilder
-from app.core.audio_manager import AudioGenerationError, AudioManager
-from app.core.asset_planner import AssetPlanner
-from app.core.asset_manager import AssetManager
-from app.core.frame_renderer import FrameRenderer
-from app.core.pipeline_runner import PipelineRunner
-from app.core.scene_graph_builder import SceneGraphBuilder
-from app.core.scene_renderer import SceneRenderer
-from app.core.script_generator import (
-    ScriptGeminiError,
-    ScriptGenerator,
-    ScriptGeneratorError,
-    ScriptJSONError,
-    ScriptValidationError,
-)
-from app.core.timeline_synchronizer import TimelineSynchronizer
-from app.core.video_composer import (
-    FFmpegNotFoundError,
-    VideoComposer,
-    VideoCompositionError,
-)
+from importlib import import_module
 
-__all__ = [
-    "AnimationTimelineBuilder",
-    "AudioGenerationError",
-    "AudioManager",
-    "AssetManager",
-    "AssetPlanner",
-    "FrameRenderer",
-    "PipelineRunner",
-    "SceneGraphBuilder",
-    "SceneRenderer",
-    "ScriptGeminiError",
-    "ScriptGenerator",
-    "ScriptGeneratorError",
-    "ScriptJSONError",
-    "ScriptValidationError",
-    "TimelineSynchronizer",
-    "FFmpegNotFoundError",
-    "VideoComposer",
-    "VideoCompositionError",
-]
+_LAZY = {
+    "AnimationTimelineBuilder": ("app.core.animation_timeline_builder", "AnimationTimelineBuilder"),
+    "AudioGenerationError": ("app.core.audio_manager", "AudioGenerationError"),
+    "AudioManager": ("app.core.audio_manager", "AudioManager"),
+    "AssetManager": ("app.core.asset_manager", "AssetManager"),
+    "AssetPlanner": ("app.core.asset_planner", "AssetPlanner"),
+    "FrameRenderer": ("app.core.frame_renderer", "FrameRenderer"),
+    "PipelineRunner": ("app.core.pipeline_runner", "PipelineRunner"),
+    "SceneGraphBuilder": ("app.core.scene_graph_builder", "SceneGraphBuilder"),
+    "SceneRenderer": ("app.core.scene_renderer", "SceneRenderer"),
+    "ScriptGeminiError": ("app.core.script_generator", "ScriptGeminiError"),
+    "ScriptGenerator": ("app.core.script_generator", "ScriptGenerator"),
+    "ScriptGeneratorError": ("app.core.script_generator", "ScriptGeneratorError"),
+    "ScriptJSONError": ("app.core.script_generator", "ScriptJSONError"),
+    "ScriptValidationError": ("app.core.script_generator", "ScriptValidationError"),
+    "TimelineSynchronizer": ("app.core.timeline_synchronizer", "TimelineSynchronizer"),
+    "FFmpegNotFoundError": ("app.core.video_composer", "FFmpegNotFoundError"),
+    "VideoComposer": ("app.core.video_composer", "VideoComposer"),
+    "VideoCompositionError": ("app.core.video_composer", "VideoCompositionError"),
+}
+
+
+def __getattr__(name: str) -> object:
+    if name not in _LAZY:
+        raise AttributeError(name)
+    module_name, attribute = _LAZY[name]
+    value = getattr(import_module(module_name), attribute)
+    globals()[name] = value
+    return value
+
+
+__all__ = list(_LAZY)

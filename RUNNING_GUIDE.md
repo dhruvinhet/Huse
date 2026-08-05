@@ -66,7 +66,8 @@ python -m pip install -r requirements.txt
    TEMP_DIR=temp
    LOG_LEVEL=INFO
    FFMPEG_PATH=
-   DEBUG_ARTIFACTS=true
+   DEBUG_ARTIFACTS=false
+   DEBUG_FRAME_TRACE_FULL=false
    DEBUG_DIR=outputs/debug
    PIPELINE_VERSION=v2
    V2_MAX_REPAIR_ATTEMPTS=2
@@ -76,7 +77,7 @@ python -m pip install -r requirements.txt
    `nvidea` is also accepted) for NVIDIA. With NVIDIA selected, fill in
    `NVIDIA_API_KEY` and choose the model with `NVIDIA_MODEL`.
    *   **GEMINI_MODEL**: By default, this is set to `gemini-3.5-flash`. If you encounter high demand error (503), you can switch it to another model like `gemini-3.6-flash` or `gemini-3.5-flash-lite`.
-   *   **FFMPEG_PATH**: If FFmpeg/FFprobe are not configured in your system `PATH`, set `FFMPEG_PATH` to the absolute folder path containing `ffmpeg.exe` (e.g., `FFMPEG_PATH=C:/ffmpeg/bin`).*
+   *   **FFMPEG_PATH**: If FFmpeg is not on `PATH`, set this to the absolute executable path (for example, `FFMPEG_PATH=C:/ffmpeg/bin/ffmpeg.exe`).
 
 ---
 
@@ -95,6 +96,14 @@ Type your topic and press `Enter`. The pipeline will execute all stages and gene
 * **Final Video**: `outputs/final_video.mp4`
 * **Narrated Audio**: `outputs/audio/narration.mp3`
 * **Debug Checkpoints**: `outputs/debug/runs/<run_id>/`
+
+Debug checkpoints are created only when `DEBUG_ARTIFACTS=true`. The default
+event/keyframe trace is bounded; set `DEBUG_FRAME_TRACE_FULL=true` for an
+explicit per-frame diagnostic run.
+
+For narrower environments, install `requirements-minimal.txt`,
+`requirements-audio.txt`, `requirements-provider.txt`, or
+`requirements-multimodal.txt` separately. Use `requirements-dev.txt` for tests.
 
 ---
 
