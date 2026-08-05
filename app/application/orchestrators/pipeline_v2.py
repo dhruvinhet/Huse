@@ -51,6 +51,7 @@ from app.domain.storyboard import ShotPlan, Storyboard
 from app.knowledge import InMemoryVisualKnowledgeBase
 from app.layout import HierarchicalLayoutEngine
 from app.motion import SemanticAnimationPlanner
+from app.novelty import NoveltyManager, StructuralFingerprintBuilder
 from app.observability import ArtifactCheckpointStore
 from app.planning import (
     AttentionPlanningEngine,
@@ -221,6 +222,10 @@ class V2PipelineRunner:
         )
         self._last_artifact_id = None
         started = perf_counter()
+        novelty = NoveltyManager(
+            self._working_path(Path(output_dir) / "novelty" / "history.json")
+        )
+        current_fingerprint = None
         narration_cache: dict[str, NarrationPlan] = {}
         assets_cache: dict[str, object] = {}
         audio_cache: dict[str, object] = {}
@@ -287,6 +292,9 @@ class V2PipelineRunner:
                 pedagogy = pedagogy_future.result()
                 strategies = strategies_future.result()
                 template_matches = template_matches_future.result()
+            template_matches = novelty.adjust_matches(
+                template_matches, lesson.concept_graph
+            )
             self._record("v2/pedagogy.json", pedagogy)
             self._debug.write_json(
                 "v2/strategy.json",
@@ -651,6 +659,15 @@ class V2PipelineRunner:
                     camera_cache[camera_key] = camera
                 self._record("v2/motion.json", motion)
                 self._record("v2/camera.json", camera)
+                current_fingerprint = StructuralFingerprintBuilder.build(
+                    storyboard,
+                    layout,
+                    camera,
+                    document,
+                    template_program,
+                )
+                novelty_assessment = novelty.assess(current_fingerprint)
+                self._record("v2/novelty.json", novelty_assessment)
                 report = self._quality.evaluate(
                     "compiled_plan",
                     motion,
@@ -838,6 +855,8 @@ class V2PipelineRunner:
                     ),
                 )
                 self._record("v2/result.json", result)
+                if current_fingerprint is not None:
+                    novelty.record(current_fingerprint)
                 status = "complete"
                 return result
             raise QualityGateError("V2 repair budget exhausted")

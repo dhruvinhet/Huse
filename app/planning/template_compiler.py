@@ -28,6 +28,7 @@ from app.domain.strategy import (
     VisualStrategy,
 )
 from app.domain.visual_intent import RendererOperator
+from app.novelty import REVIEWED_LAYOUT_VARIANTS
 
 
 class TemplateCompiler:
@@ -138,6 +139,7 @@ class TemplateCompiler:
                 MAX_SEMANTIC_RELATIONS,
             )
         root = library.instantiate(selection.template_id, parameters)
+        root = self._apply_layout_variant(root, selection)
         root = self._ground_object(root, lesson)
         root = self._mark_connector_ownership(root)
         storyboard = self._compile_storyboard(
@@ -159,6 +161,7 @@ class TemplateCompiler:
             capability_evidence=selection.capability_evidence,
             pedagogy_mode=pedagogy.mode,
             storyboard=storyboard,
+            layout_variants={selection.template_id: selection.layout_variant},
         )
 
     def _select_for_shots(
@@ -200,7 +203,12 @@ class TemplateCompiler:
                     1, len(required)
                 )
                 preference = 0.08 if match.template_id in preferred else 0.0
-                return match.score + 0.30 * overlap + preference, overlap, match.template_id
+                return (
+                    match.score - match.novelty_penalty
+                    + 0.30 * overlap + preference,
+                    overlap,
+                    match.template_id,
+                )
 
             selections.append(max(eligible, key=rank))
         return selections
@@ -238,6 +246,7 @@ class TemplateCompiler:
                 preferred_concept_ids=concepts or selection.concept_ids,
             )
             root = library.instantiate(selection.template_id, parameters)
+            root = self._apply_layout_variant(root, selection)
             root = self._mark_connector_ownership(
                 self._ground_object(root, lesson)
             )
@@ -338,7 +347,30 @@ class TemplateCompiler:
             )),
             pedagogy_mode=pedagogy.mode,
             storyboard=storyboard,
+            layout_variants={
+                selection.template_id: selection.layout_variant
+                for selection in selections
+            },
         )
+
+    @staticmethod
+    def _apply_layout_variant(
+        root: VisualObjectSpec,
+        selection: TemplateMatch,
+    ) -> VisualObjectSpec:
+        """Apply only an explicitly reviewed layout alternative."""
+
+        if selection.layout_variant == "canonical":
+            return root
+        expected = REVIEWED_LAYOUT_VARIANTS.get(selection.template_id)
+        if selection.layout_variant != expected:
+            raise ValueError(
+                f"unreviewed layout variant {selection.layout_variant!r} for "
+                f"template {selection.template_id!r}"
+            )
+        root.content["layout"] = selection.layout_variant
+        root.content["layout_variant"] = selection.layout_variant
+        return root
 
     def _select(
         self,
@@ -367,7 +399,7 @@ class TemplateCompiler:
                 for candidate in candidates
                 for concept_id in candidate.concept_ids
             }) / concept_count
-            score = max(item.score for item in candidates)
+            score = max(item.score - item.novelty_penalty for item in candidates)
             score += 0.08 if template_id not in self._GENERIC_TEMPLATE_IDS else 0
             score += 0.12 if template_id in preferred else 0
             score += 0.10 * coverage
@@ -376,7 +408,10 @@ class TemplateCompiler:
         selected_id = max(grouped, key=lambda item: (rank(item)[0], item))
         return max(
             grouped[selected_id],
-            key=lambda item: (item.score, len(item.concept_ids)),
+            key=lambda item: (
+                item.score - item.novelty_penalty,
+                len(item.concept_ids),
+            ),
         )
 
     def _validated_parameters(

@@ -30,6 +30,7 @@ from app.domain.narration import (
 )
 from app.layout import HierarchicalLayoutEngine
 from app.motion import SemanticAnimationPlanner
+from app.novelty import StructuralFingerprintBuilder, structural_similarity
 from app.camera import SemanticCameraPlanner
 from app.planning import ConceptGraphStoryboardBuilder, PedagogyRouter
 from app.quality import (
@@ -152,6 +153,9 @@ class OfflineCaseExecutor:
             if isinstance(raw, dict)
             for item in self._objects(raw)
         })
+        fingerprint = StructuralFingerprintBuilder.build(
+            storyboard, layout, camera, document
+        )
         return BenchmarkCaseResult(
             case_id=case.case_id,
             status="completed",
@@ -169,6 +173,7 @@ class OfflineCaseExecutor:
             ),
             selected_operators=operators,
             quality_findings=[finding.code for finding in quality.findings],
+            structural_fingerprint=fingerprint,
         )
 
     @staticmethod
@@ -288,6 +293,7 @@ class ProviderCaseExecutor:
         artifacts = runner.last_artifacts
         storyboard = artifacts.get("v2/storyboard/accepted.json")
         template_program = artifacts.get("v2/template_program.json")
+        novelty = artifacts.get("v2/novelty.json")
         return BenchmarkCaseResult(
             case_id=case.case_id,
             status="completed",
@@ -328,6 +334,10 @@ class ProviderCaseExecutor:
                 "video": result.output_file,
                 **({"debug": runner.debug_run_dir.as_posix()} if runner.debug_run_dir else {}),
             },
+            structural_fingerprint=getattr(novelty, "fingerprint", None),
+            novelty_similarity=getattr(
+                novelty, "maximum_recent_similarity", None
+            ),
         )
 
     @staticmethod
@@ -375,6 +385,7 @@ class BenchmarkRunner:
         root.mkdir(parents=True, exist_ok=True)
         started = datetime.now(timezone.utc)
         cases: list[BenchmarkCaseResult] = []
+        recent_fingerprints = []
         selected = suite.cases[:limit] if limit is not None else suite.cases
         for case in selected:
             case_started = perf_counter()
@@ -388,6 +399,15 @@ class BenchmarkRunner:
                     metrics=BenchmarkMetrics(),
                     error=f"{type(exc).__name__}: {exc}",
                 )
+            if result.structural_fingerprint is not None:
+                if recent_fingerprints and result.novelty_similarity is None:
+                    result.novelty_similarity = max(
+                        structural_similarity(
+                            result.structural_fingerprint, previous
+                        )
+                        for previous in recent_fingerprints
+                    )
+                recent_fingerprints.append(result.structural_fingerprint)
             cases.append(result)
             (root / f"{case.case_id}.json").write_text(
                 result.model_dump_json(indent=2),

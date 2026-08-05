@@ -70,6 +70,11 @@ class TemplateMatch(BaseModel):
         default_factory=dict
     )
     default_usage: list[NonEmptyString] = Field(default_factory=list)
+    novelty_penalty: float = Field(default=0.0, ge=0, le=1)
+    novelty_evidence: list[NonEmptyString] = Field(default_factory=list)
+    layout_variant: Literal["canonical", "horizontal", "vertical", "grid"] = (
+        "canonical"
+    )
 
 
 class CompiledTemplateProgram(BaseModel):
@@ -89,3 +94,6 @@ class CompiledTemplateProgram(BaseModel):
     capability_evidence: list[NonEmptyString] = Field(default_factory=list)
     pedagogy_mode: PedagogyMode
     storyboard: Storyboard
+    layout_variants: dict[NonEmptyString, NonEmptyString] = Field(
+        default_factory=dict
+    )

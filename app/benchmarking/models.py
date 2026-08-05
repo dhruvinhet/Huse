@@ -8,6 +8,7 @@ from pydantic import Field, model_validator
 
 from app.domain.generation import AudienceLevel
 from app.domain.lesson import ConceptRelation
+from app.domain.novelty import StructuralFingerprint
 from app.domain.strategy import ParameterProvenance
 from app.models.base import BaseModel, NonEmptyString
 
@@ -124,6 +125,8 @@ class BenchmarkCaseResult(BaseModel):
     quality_findings: list[NonEmptyString] = Field(default_factory=list)
     artifact_paths: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)
     error: str | None = None
+    structural_fingerprint: StructuralFingerprint | None = None
+    novelty_similarity: float | None = Field(default=None, ge=0, le=1)
 
 
 class BenchmarkReport(BaseModel):

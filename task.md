@@ -370,13 +370,13 @@ Acceptance criteria:
 Primary areas: template/operator selection, layout variants, style variants,
 and benchmark history.
 
-- [ ] Define a structural fingerprint from operator sequence, template family,
+- [x] Define a structural fingerprint from operator sequence, template family,
   layout topology, camera plan, action sequence, and palette/style tokens.
-- [ ] Compare candidates with recent successful outputs and select a different
+- [x] Compare candidates with recent successful outputs and select a different
   compatible variant when similarity exceeds a measured threshold.
-- [ ] Add reviewed layout/operator variants; never sacrifice obligation or
+- [x] Add reviewed layout/operator variants; never sacrifice obligation or
   factual correctness merely to be different.
-- [ ] Track novelty as a benchmark metric, not an unconditional quality gate,
+- [x] Track novelty as a benchmark metric, not an unconditional quality gate,
   until false-positive behavior is understood.
 
 Acceptance criteria:
