@@ -33,6 +33,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--mode", choices=[item.value for item in BenchmarkMode], default="offline")
     result.add_argument("--output", type=Path, default=REPOSITORY_ROOT / "outputs" / "benchmark")
     result.add_argument("--baseline", type=Path)
+    result.add_argument(
+        "--snapshot",
+        type=Path,
+        help="Write a committed-compatible report snapshot for future deltas.",
+    )
     result.add_argument("--limit", type=int)
     result.add_argument("--seed", type=int, default=0)
     result.add_argument("--provider-id")
@@ -69,6 +74,10 @@ def main() -> int:
     )
     print(f"Report: {(args.output / 'report.json').resolve()}")
     print(f"Reliability: {report.reliability:.1%} ({len(report.cases)} cases)")
+    if args.snapshot:
+        args.snapshot.parent.mkdir(parents=True, exist_ok=True)
+        args.snapshot.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+        print(f"Snapshot: {args.snapshot.resolve()}")
     if args.baseline:
         comparison = compare_reports(load_report(args.baseline), report)
         comparison_path = args.output / "comparison.json"

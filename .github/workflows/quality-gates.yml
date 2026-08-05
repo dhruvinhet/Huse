@@ -1,0 +1,44 @@
+name: Quality gates
+
+on:
+  pull_request:
+  push:
+    branches: [main, Harsh---DB]
+  workflow_dispatch:
+
+jobs:
+  deterministic-release:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install development profile
+        run: python -m pip install -r requirements-dev.txt
+      - name: Run test suite
+        run: python -m pytest -q
+      - name: Run offline benchmark
+        run: python scripts/run_benchmark.py --output outputs/benchmark/release
+      - name: Run two-minute renderer profile
+        run: python scripts/benchmark_renderer.py --output-dir outputs/benchmark/performance --runs 3
+      - name: Evaluate release gates
+        run: >-
+          python scripts/check_release.py
+          --benchmark outputs/benchmark/release/report.json
+          --performance outputs/benchmark/performance/report.json
+          --baseline tests/benchmark/release-baseline.v1.json
+          --waivers release-waivers.json
+          --output outputs/release/release-report.json
+      - name: Publish benchmark and release artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: huse-quality-gates
+          path: |
+            outputs/benchmark/release
+            outputs/benchmark/performance/report.json
+            outputs/release/release-report.json
+          if-no-files-found: error

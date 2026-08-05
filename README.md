@@ -197,6 +197,16 @@ install; core domain and planning imports do not load provider or TTS SDKs.
 
 Tests do not make real Gemini, NVIDIA, TTS, or FFmpeg network/process calls unless explicitly configured as an external integration run.
 
+## Release gates
+
+The GitHub Actions quality workflow runs the full test suite, the versioned
+30-case offline benchmark, the documented two-minute renderer profile, and
+`scripts/check_release.py`. It publishes benchmark deltas and release artifacts
+and gates deterministic reliability, semantic, readability, timing, and runtime
+targets. Novelty/model-judged signals are report-only. A failed deterministic
+gate requires a waiver in `release-waivers.json` with a gate ID, owner, reason,
+and future expiry.
+
 ## JSON Schemas
 
 V2 contracts are registered in `app/domain/schemas.py`. Regenerate committed schemas with:

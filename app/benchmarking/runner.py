@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import platform
+import re
 from time import perf_counter
 from typing import Protocol
 
@@ -27,6 +28,7 @@ from app.domain.narration import (
     NarrationPhrase,
     NarrationPlan,
     PhraseTiming,
+    WordTiming,
 )
 from app.layout import HierarchicalLayoutEngine
 from app.motion import SemanticAnimationPlanner
@@ -242,11 +244,27 @@ class OfflineCaseExecutor:
             )
             for index, phrase in enumerate(narration.phrases)
         ]
+        words = [
+            WordTiming(
+                phrase_id=phrase.phrase_id,
+                beat_id=phrase.beat_id,
+                text=token,
+                audio_start=float(index) + token_index / len(tokens),
+                audio_end=float(index) + (token_index + 1) / len(tokens),
+                confidence=0.8,
+                timing_source="aligned",
+            )
+            for index, phrase in enumerate(narration.phrases)
+            for tokens in [re.findall(r"[A-Za-z0-9']+", phrase.text)]
+            for token_index, token in enumerate(tokens)
+            if tokens
+        ]
         return AlignedAudio(
             audio_path="benchmark://silent",
             duration=float(len(timings)),
             sample_rate=24_000,
             phrases=timings,
+            words=words,
         )
 
     @staticmethod

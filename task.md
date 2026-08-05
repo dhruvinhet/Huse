@@ -412,12 +412,12 @@ Acceptance criteria:
 
 Depends on T01, T02, T06, T08, T09, and T10.
 
-- [ ] Publish benchmark deltas and artifacts for release candidates.
-- [ ] Gate on reliability, clipping/readability, factual/relation validity,
+- [x] Publish benchmark deltas and artifacts for release candidates.
+- [x] Gate on reliability, clipping/readability, factual/relation validity,
   action coverage, state deltas, and approved runtime targets.
-- [ ] Start non-deterministic/model-judged metrics as reported signals and only
+- [x] Start non-deterministic/model-judged metrics as reported signals and only
   promote them to gates after repeatability is measured.
-- [ ] Require an explicit waiver, owner, and expiry for any failed release gate.
+- [x] Require an explicit waiver, owner, and expiry for any failed release gate.
 
 Initial targets to validate and tune from the T01 baseline:
 
