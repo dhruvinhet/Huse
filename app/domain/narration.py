@@ -61,6 +61,7 @@ class WordTiming(BaseModel):
     audio_start: float = Field(ge=0)
     audio_end: float = Field(gt=0)
     confidence: float = Field(default=1.0, ge=0, le=1)
+    timing_source: Literal["provider", "estimated", "aligned"] = "provider"
 
     @model_validator(mode="after")
     def validate_interval(self) -> Self:

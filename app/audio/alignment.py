@@ -55,9 +55,10 @@ class ScenePhraseAligner:
                 audio_start=word.start_time,
                 audio_end=word.end_time,
                 confidence=(
-                    1.0 if audio.word_timing_source in {"provider", "mixed"}
+                    1.0 if word.timing_source == "provider"
                     else 0.35
                 ),
+                timing_source=word.timing_source,
             )
             for word in audio.words
             if word.scene_number in phrase_by_scene
@@ -71,6 +72,7 @@ class ScenePhraseAligner:
                     audio_start=scene.start_time + relative_start,
                     audio_end=scene.start_time + relative_end,
                     confidence=0.35,
+                    timing_source="estimated",
                 )
                 for phrase, scene in zip(
                     narration.phrases,

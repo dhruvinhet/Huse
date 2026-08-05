@@ -11,6 +11,15 @@ from app.domain.storyboard import Storyboard
 class SemanticCameraPlanner:
     """Plan restrained camera cues aligned with educational beats."""
 
+    MINIMUM_VISIBLE_CHANGE_PX = 2.0
+
+    def __init__(self, minimum_visible_change_px: float = 2.0) -> None:
+        """Configure the minimum meaningful crop-edge movement in pixels."""
+
+        if minimum_visible_change_px < 0:
+            raise ValueError("minimum camera change cannot be negative")
+        self._minimum_visible_change_px = minimum_visible_change_px
+
     def plan(
         self,
         storyboard: Storyboard,
@@ -66,6 +75,21 @@ class SemanticCameraPlanner:
                     operation,
                 )
             )
+            measured_change = self._source_delta(target_bounds, previous_source)
+            exempt = operation in {CameraOperation.FIT, CameraOperation.HOLD}
+            source_width = max(
+                1.0,
+                target_bounds["source_right"] - target_bounds["source_left"],
+            )
+            source_height = max(
+                1.0,
+                target_bounds["source_bottom"] - target_bounds["source_top"],
+            )
+            final_target_occupancy = max(
+                target_bounds.get("target_width", 0.0) / source_width,
+                target_bounds.get("target_height", 0.0) / source_height,
+            )
+            target_edges_retained = self._target_edges_retained(target_bounds)
             source_start = {
                 f"source_start_{key.removeprefix('source_')}": value
                 for key, value in previous_source.items()
@@ -97,12 +121,50 @@ class SemanticCameraPlanner:
                             if beat.shot_plan is not None
                             else (0.35, 0.70)
                         ),
+                        "fit_hold_exempt": exempt,
+                        "minimum_visible_change_px": self._minimum_visible_change_px,
+                        "measured_visible_change_px": measured_change,
+                        "final_target_occupancy": final_target_occupancy,
+                        "target_edges_retained": target_edges_retained,
                         **target_bounds,
                         "ease": "smoothstep",
                     },
                 )
             )
         return CameraPlan(duration=alignment.duration, cues=cues)
+
+    @staticmethod
+    def _source_delta(
+        current: dict[str, float],
+        previous: dict[str, float],
+    ) -> float:
+        """Return the maximum crop-edge displacement in output pixels."""
+
+        return max(
+            abs(float(current[key]) - float(previous[key]))
+            for key in (
+                "source_left", "source_top", "source_right", "source_bottom"
+            )
+        )
+
+    @staticmethod
+    def _target_edges_retained(bounds: dict[str, float]) -> bool:
+        """Confirm the final camera crop contains every required target edge."""
+
+        required = {
+            "target_x", "target_y", "target_width", "target_height",
+            "source_left", "source_top", "source_right", "source_bottom",
+        }
+        if not required.issubset(bounds):
+            return True
+        return (
+            bounds["target_x"] >= bounds["source_left"] - 1e-6
+            and bounds["target_y"] >= bounds["source_top"] - 1e-6
+            and bounds["target_x"] + bounds["target_width"]
+            <= bounds["source_right"] + 1e-6
+            and bounds["target_y"] + bounds["target_height"]
+            <= bounds["source_bottom"] + 1e-6
+        )
 
     @staticmethod
     def _operation_for_purpose(purpose: str) -> str:

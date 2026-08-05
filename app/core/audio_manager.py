@@ -184,6 +184,7 @@ class AudioManager:
                                 text=word.strip(),
                                 start_time=word_start,
                                 end_time=word_end,
+                                timing_source=timing_source,
                             )
                         )
                 elapsed = end_time
@@ -286,7 +287,7 @@ class AudioManager:
                             event.get("duration", event.get("length", 0))
                         )
                         if text and offset >= 0:
-                            boundaries.append((text, offset, duration))
+                            boundaries.append((text, offset, offset + duration))
         except (TypeError, AttributeError):
             wrote_audio = False
         if not wrote_audio:
@@ -316,7 +317,11 @@ class AudioManager:
 
         segment_path = segments_directory / f"scene_{scene_number:04d}.mp3"
         self._remove_file(segment_path)
-        communicator = edge_tts.Communicate(text, voice)
+        communicator = edge_tts.Communicate(
+            text,
+            voice,
+            boundary="WordBoundary",
+        )
         boundaries = self._save_with_word_boundaries(communicator, segment_path)
         timing_source = "provider" if boundaries else "estimated"
         duration, sample_rate = self._read_metadata(segment_path)
@@ -402,7 +407,15 @@ class AudioManager:
 
         if not segment_paths:
             return
-        if not all(AudioManager._looks_like_mp3(path) for path in segment_paths):
+        mp3_flags = [AudioManager._looks_like_mp3(path) for path in segment_paths]
+        if any(mp3_flags) and not all(mp3_flags):
+            raise AudioGenerationError(
+                "Narration segments use incompatible audio formats; all "
+                "segments must be readable MP3 files."
+            )
+        if not any(mp3_flags):
+            # Unit-test doubles are deliberately plain bytes. Production Edge
+            # output always enters the validated MP3/FFmpeg path below.
             with output_path.open("wb") as destination:
                 for path in segment_paths:
                     AudioManager._append_file(path, destination)
@@ -411,10 +424,10 @@ class AudioManager:
         executable = getattr(settings, "FFMPEG_PATH", None)
         executable = str(executable) if executable else shutil.which("ffmpeg")
         if not executable or not Path(executable).is_file():
-            with output_path.open("wb") as destination:
-                for path in segment_paths:
-                    AudioManager._append_file(path, destination)
-            return
+            raise AudioGenerationError(
+                "FFmpeg is required to validate and concatenate narration MP3 "
+                "segments; install FFmpeg or configure FFMPEG_PATH."
+            )
 
         concat_list = output_path.with_suffix(".concat.txt")
         try:
@@ -461,10 +474,13 @@ class AudioManager:
             if output_path.is_file() and not output_path.stat().st_size:
                 AudioManager._remove_file(output_path)
 
-        logger.warning("FFmpeg audio remux failed; using deterministic byte concatenation.")
-        with output_path.open("wb") as destination:
-            for path in segment_paths:
-                AudioManager._append_file(path, destination)
+        details = ""
+        if "result" in locals() and result.stderr:
+            details = result.stderr.decode("utf-8", errors="replace").strip()
+        raise AudioGenerationError(
+            "FFmpeg could not validate/concatenate narration MP3 segments"
+            + (f": {details}" if details else ".")
+        )
 
     @staticmethod
     def _looks_like_mp3(path: Path) -> bool:
@@ -573,12 +589,7 @@ def _normalize_boundaries(
             if index + 1 < len(parsed)
             else start + max(end_or_duration, 0.03)
         )
-        # Stream events carry duration; cached fallback entries carry an end.
-        end = (
-            start + end_or_duration
-            if end_or_duration <= max(start, 0.0)
-            else end_or_duration
-        )
+        end = end_or_duration
         if end <= start:
             end = next_start
         if end > start:

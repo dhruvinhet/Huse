@@ -1,0 +1,14 @@
+[
+  {
+    "type": "WordBoundary",
+    "offset": 0,
+    "duration": 4200000,
+    "text": "First"
+  },
+  {
+    "type": "WordBoundary",
+    "offset": 5000000,
+    "duration": 3500000,
+    "text": "scene"
+  }
+]

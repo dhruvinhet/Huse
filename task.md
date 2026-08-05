@@ -343,16 +343,16 @@ Acceptance criteria:
 Primary files: `app/camera/planner.py`, `app/motion/planner.py`, reveal/motion
 adapters, `app/core/audio_manager.py`, and `app/audio/alignment.py`.
 
-- [ ] Require a configurable minimum camera crop/center/scale delta when the
+- [x] Require a configurable minimum camera crop/center/scale delta when the
   pedagogy calls for a camera change; validate the final rendered target scale.
-- [ ] Make FIT/HOLD exemptions explicit rather than treating them as failed
+- [x] Make FIT/HOLD exemptions explicit rather than treating them as failed
   motion.
-- [ ] Use connector/path geometry and semantic action deltas for travel,
+- [x] Use connector/path geometry and semantic action deltas for travel,
   transfer, routing, morphing, and accumulation animations.
-- [ ] Test real Edge-TTS boundary parsing with a recorded provider fixture.
-- [ ] Report provider, estimated, and mixed timing coverage/confidence; add a
+- [x] Test real Edge-TTS boundary parsing with a recorded provider fixture.
+- [x] Report provider, estimated, and mixed timing coverage/confidence; add a
   forced-alignment adapter only if benchmark error justifies it.
-- [ ] Validate concatenated audio formats and fail clearly instead of accepting
+- [x] Validate concatenated audio formats and fail clearly instead of accepting
   incompatible raw-byte concatenation.
 
 Acceptance criteria:

@@ -199,6 +199,9 @@ def collect_metrics(
         )
 
     audio_timing_coverage: float | None = None
+    provider_timing_coverage: float | None = None
+    estimated_timing_coverage: float | None = None
+    mean_word_timing_confidence: float | None = None
     if narration is not None and alignment is not None:
         spoken_words = sum(
             len(re.findall(r"[A-Za-z0-9']+", phrase.text))
@@ -207,6 +210,24 @@ def collect_metrics(
         aligned_words = sum(word.confidence >= 0.5 for word in alignment.words)
         audio_timing_coverage = (
             min(1.0, aligned_words / spoken_words) if spoken_words else 1.0
+        )
+        provider_words = sum(
+            word.timing_source in {"provider", "aligned"}
+            for word in alignment.words
+        )
+        estimated_words = sum(
+            word.timing_source == "estimated" for word in alignment.words
+        )
+        provider_timing_coverage = (
+            min(1.0, provider_words / spoken_words) if spoken_words else 1.0
+        )
+        estimated_timing_coverage = (
+            min(1.0, estimated_words / spoken_words) if spoken_words else 0.0
+        )
+        mean_word_timing_confidence = (
+            sum(word.confidence for word in alignment.words) / len(alignment.words)
+            if alignment.words
+            else 0.0
         )
 
     finding_codes = [finding.code for finding in quality.findings] if quality else []
@@ -219,6 +240,9 @@ def collect_metrics(
         clipping_violations=sum(code in _CLIPPING_CODES for code in finding_codes),
         readability_violations=sum(code in _READABILITY_CODES for code in finding_codes),
         audio_timing_coverage=audio_timing_coverage,
+        provider_timing_coverage=provider_timing_coverage,
+        estimated_timing_coverage=estimated_timing_coverage,
+        mean_word_timing_confidence=mean_word_timing_confidence,
         quality_score=quality.overall_score if quality is not None else None,
         total_beats=total_beats,
         total_objects=total_objects,

@@ -6,7 +6,7 @@ from statistics import median
 
 from PIL import Image, ImageChops
 
-from app.domain.camera import CameraPlan
+from app.domain.camera import CameraOperation, CameraPlan
 from app.domain.layout import LaidOutNode, LayoutPlan
 from app.domain.quality import (
     EvaluationDecision,
@@ -291,6 +291,67 @@ class RenderedFrameQualityEvaluator:
                 object_ids=sorted(set(missing_targets)),
                 patch_paths=["/camera/cues"],
             ))
+        for cue in camera.cues:
+            exempt = cue.operation in {CameraOperation.FIT, CameraOperation.HOLD}
+            measured = cue.parameters.get("measured_visible_change_px")
+            if (
+                not exempt
+                and isinstance(measured, (int, float))
+                and measured < self._policy.minimum_camera_delta_px
+            ):
+                findings.append(QualityFinding(
+                    code="camera_change_too_small",
+                    severity=FindingSeverity.ERROR,
+                    artifact_id="rendered_frames",
+                    message=(
+                        f"Camera cue {cue.cue_id} changes only {measured:.2f}px; "
+                        f"at least {self._policy.minimum_camera_delta_px:.2f}px "
+                        "is required for a declared camera move."
+                    ),
+                    repair_target="camera",
+                    repair_scope="beat",
+                    beat_id=cue.beat_id,
+                    measured_value=float(measured),
+                    required_value=self._policy.minimum_camera_delta_px,
+                    patch_paths=["/camera/cues"],
+                ))
+            if not exempt and cue.parameters.get("target_edges_retained") is False:
+                findings.append(QualityFinding(
+                    code="camera_target_edge_clipped",
+                    severity=FindingSeverity.ERROR,
+                    artifact_id="rendered_frames",
+                    message=f"Camera cue {cue.cue_id} clips a required focal edge.",
+                    repair_target="camera",
+                    repair_scope="beat",
+                    beat_id=cue.beat_id,
+                    patch_paths=["/camera/cues"],
+                ))
+            occupancy = cue.parameters.get("final_target_occupancy")
+            target_range = cue.parameters.get("occupancy_target")
+            if (
+                not exempt
+                and isinstance(occupancy, (int, float))
+                and isinstance(target_range, list)
+                and len(target_range) == 2
+                and all(isinstance(value, (int, float)) for value in target_range)
+                and not float(target_range[0]) - 0.05
+                <= float(occupancy)
+                <= float(target_range[1]) + 0.05
+            ):
+                findings.append(QualityFinding(
+                    code="camera_focal_scale_out_of_range",
+                    severity=FindingSeverity.ERROR,
+                    artifact_id="rendered_frames",
+                    message=(
+                        f"Camera cue {cue.cue_id} focal occupancy "
+                        f"{float(occupancy):.1%} is outside its declared range."
+                    ),
+                    repair_target="camera",
+                    repair_scope="beat",
+                    beat_id=cue.beat_id,
+                    measured_value=float(occupancy),
+                    patch_paths=["/camera/cues"],
+                ))
 
     @staticmethod
     def _flatten(root: LaidOutNode) -> list[LaidOutNode]:

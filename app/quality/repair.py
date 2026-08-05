@@ -84,6 +84,9 @@ class QualityRepairPlanner:
         "layout": RepairStage.LAYOUT,
         "motion": RepairStage.MOTION,
         "camera": RepairStage.CAMERA,
+        "camera_change_too_small": RepairStage.CAMERA,
+        "camera_target_edge_clipped": RepairStage.CAMERA,
+        "camera_focal_scale_out_of_range": RepairStage.CAMERA,
         "renderer": RepairStage.RENDERER,
         "composer": RepairStage.COMPOSER,
     }

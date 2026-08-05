@@ -65,7 +65,7 @@ def test_edge_tts_is_mocked_and_metadata_is_returned(
     """Combined narration is saved and returned as validated metadata."""
 
     audio_path = configure_audio_output(tmp_path, monkeypatch)
-    def make_communicator(text: str, _voice: str) -> MagicMock:
+    def make_communicator(text: str, _voice: str, **_kwargs: object) -> MagicMock:
         communicator = MagicMock()
         communicator.save_sync.side_effect = (
             lambda path: Path(path).write_bytes(text.encode("utf-8"))
@@ -112,6 +112,10 @@ def test_edge_tts_is_mocked_and_metadata_is_returned(
         call.args[1] == "en-US-AriaNeural"
         for call in constructor.call_args_list
     )
+    assert all(
+        call.kwargs["boundary"] == "WordBoundary"
+        for call in constructor.call_args_list
+    )
     assert audio_path.read_bytes() == (
         b"First scene narration.Second scene narration."
     )
@@ -128,7 +132,7 @@ def test_word_boundary_event_spelling_is_normalized(
     """Boundary events remain available across Edge-TTS event spellings."""
 
     configure_audio_output(tmp_path, monkeypatch)
-    def make_communicator(_text: str, _voice: str) -> MagicMock:
+    def make_communicator(_text: str, _voice: str, **_kwargs: object) -> MagicMock:
         communicator = MagicMock()
         communicator.stream_sync.return_value = iter([
             {"type": "audio", "data": b"mp3"},
@@ -162,6 +166,29 @@ def test_word_boundary_event_spelling_is_normalized(
     assert metadata.words[0].start_time == 0
 
 
+def test_recorded_edge_tts_word_boundary_fixture_is_parsed(tmp_path: Path) -> None:
+    """A recorded edge-tts WordBoundary payload retains exact tick intervals."""
+
+    events = json.loads(
+        (Path(__file__).parent / "fixtures" / "edge_tts_word_boundaries.json")
+        .read_text(encoding="utf-8")
+    )
+    communicator = MagicMock()
+    communicator.stream_sync.return_value = iter([
+        {"type": "audio", "data": b"ID3-audio"},
+        *events,
+    ])
+
+    boundaries = AudioManager._save_with_word_boundaries(
+        communicator, tmp_path / "recorded.mp3"
+    )
+
+    assert boundaries == [
+        ("First", 0.0, 0.42),
+        ("scene", 0.5, 0.85),
+    ]
+
+
 def test_identical_narration_reuses_tts_cache(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -171,7 +198,7 @@ def test_identical_narration_reuses_tts_cache(
     configure_audio_output(tmp_path, monkeypatch)
     constructor = MagicMock()
 
-    def make_communicator(text: str, _voice: str) -> MagicMock:
+    def make_communicator(text: str, _voice: str, **_kwargs: object) -> MagicMock:
         communicator = MagicMock()
         communicator.save_sync.side_effect = (
             lambda path: Path(path).write_bytes(text.encode("utf-8"))
@@ -234,3 +261,40 @@ def test_edge_tts_failure_is_translated(
 
     with pytest.raises(AudioGenerationError, match="service unavailable"):
         AudioManager().generate(narrated_script())
+
+
+def test_mixed_audio_segment_formats_fail_clearly(tmp_path: Path) -> None:
+    """A malformed segment cannot be silently appended to real MP3 audio."""
+
+    valid = tmp_path / "valid.mp3"
+    invalid = tmp_path / "invalid.mp3"
+    valid.write_bytes(b"ID3-valid")
+    invalid.write_bytes(b"not-mp3")
+
+    with pytest.raises(AudioGenerationError, match="incompatible audio formats"):
+        AudioManager._combine_segments(
+            [valid, invalid], tmp_path / "combined.mp3"
+        )
+
+
+def test_real_mp3_segments_require_ffmpeg_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Valid-looking MP3s never fall back to unchecked byte concatenation."""
+
+    first = tmp_path / "first.mp3"
+    second = tmp_path / "second.mp3"
+    first.write_bytes(b"ID3-first")
+    second.write_bytes(b"ID3-second")
+    monkeypatch.setattr(audio_manager.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        audio_manager,
+        "settings",
+        SimpleNamespace(FFMPEG_PATH=None),
+    )
+
+    with pytest.raises(AudioGenerationError, match="FFmpeg is required"):
+        AudioManager._combine_segments(
+            [first, second], tmp_path / "combined.mp3"
+        )

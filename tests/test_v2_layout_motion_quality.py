@@ -12,7 +12,7 @@ from app.domain.assets import (
 from app.domain.layout import Viewport
 from app.domain.narration import AlignedAudio, PhraseTiming
 from app.domain.operations import OperationType, VisualOperation
-from app.domain.storyboard import ShotPlan, VisualObjectSpec
+from app.domain.storyboard import CameraIntent, ShotPlan, VisualObjectSpec
 from app.domain.visual_document import (
     ObjectLifecycle,
     ObjectState,
@@ -21,7 +21,12 @@ from app.domain.visual_document import (
 )
 from app.layout import HierarchicalLayoutEngine
 from app.motion import SemanticAnimationPlanner
-from app.quality import DeterministicQualityEvaluator, VisualQualityEvaluator
+from app.quality import (
+    DeterministicQualityEvaluator,
+    RenderedFrameQualityEvaluator,
+    VisualQualityEvaluator,
+)
+from app.quality.policy import QualityPolicy
 from app.semantic_assets import CatalogSemanticAssetResolver
 from app.state import VisualStateTransitionEngine
 from tests.test_domain_v2 import concept_graph, storyboard
@@ -265,9 +270,18 @@ def test_shot_plan_cleans_history_and_camera_uses_source_geometry() -> None:
     original = storyboard()
     board = original.model_copy(
         update={
-            "beats": [
+                "beats": [
                 beat.model_copy(
-                    update={"shot_plan": ShotPlan.for_purpose(beat.purpose)}
+                    update={
+                        "shot_plan": ShotPlan.for_purpose(beat.purpose),
+                        **(
+                            {"camera_intent": CameraIntent(
+                                operation="zoom", target_ids=["output_box"]
+                            )}
+                            if beat.beat_id == "beat_2"
+                            else {}
+                        ),
+                    }
                 )
                 for beat in original.beats
             ]
@@ -286,3 +300,26 @@ def test_shot_plan_cleans_history_and_camera_uses_source_geometry() -> None:
     camera = SemanticCameraPlanner().plan(board, layout, aligned_audio())
     assert all("source_left" in cue.parameters for cue in camera.cues)
     assert "output_box" in camera.cues[1].target_ids
+    assert camera.cues[0].parameters["fit_hold_exempt"] is True
+    assert camera.cues[1].parameters["fit_hold_exempt"] is False
+    assert camera.cues[1].parameters["measured_visible_change_px"] >= 2
+    assert camera.cues[1].parameters["target_edges_retained"] is True
+    low, high = camera.cues[1].parameters["occupancy_target"]
+    occupancy = camera.cues[1].parameters["final_target_occupancy"]
+    assert low - 0.05 <= occupancy <= high + 0.05
+
+    bad_camera = camera.model_copy(deep=True)
+    bad_camera.cues[1].parameters["measured_visible_change_px"] = 0.5
+    findings = []
+    RenderedFrameQualityEvaluator(
+        QualityPolicy(minimum_camera_delta_px=2.0)
+    )._planned_geometry_findings(
+        {
+            "layout": layout,
+            "document": document,
+            "storyboard": board,
+            "camera": bad_camera,
+        },
+        findings,
+    )
+    assert "camera_change_too_small" in {item.code for item in findings}
