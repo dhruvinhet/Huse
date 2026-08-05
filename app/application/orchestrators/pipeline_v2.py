@@ -77,6 +77,7 @@ from app.state import VisualStateTransitionEngine
 from app.templates import TemplateRegistry, builtin_templates
 from app.timeline import PhraseManifestBuilder
 from app.utils.debug_recorder import DebugRecorder
+from app.validation import DomainValidator, LessonGroundingValidator
 
 
 StageT = TypeVar("StageT")
@@ -116,6 +117,7 @@ class V2PipelineRunner:
         storyboard_reviewer: QualityEvaluator | None = None,
         review_policy: QualityReviewPolicy | None = None,
         repair_planner: QualityRepairPlanner | None = None,
+        domain_validators: list[DomainValidator] | None = None,
     ) -> None:
         """Configure replaceable ports and production defaults."""
 
@@ -174,6 +176,7 @@ class V2PipelineRunner:
         self._storyboard_reviewer = storyboard_reviewer
         self._review_policy = review_policy or QualityReviewPolicy()
         self._repair_planner = repair_planner or QualityRepairPlanner()
+        self._grounding = LessonGroundingValidator(domain_validators)
         self._max_repairs = policy.maximum_repair_attempts
         self._manifest_builder = PhraseManifestBuilder()
         self._attention = attention_planner or AttentionPlanningEngine()
@@ -244,6 +247,12 @@ class V2PipelineRunner:
                 "Normalize Lesson Structure",
                 lambda: normalize_lesson_structure(lesson),
             )
+            lesson, grounding_report = self._stage(
+                "Validate Factual Grounding",
+                lambda: self._grounding.validate(lesson, request.sources),
+            )
+            self._record("v2/grounding_report.json", grounding_report)
+            self._grounding.raise_for_failure(grounding_report)
             self._record("v2/lesson.json", lesson)
             # These three planning products all depend only on the validated
             # lesson and audience.  Keep their contracts separate, but fan

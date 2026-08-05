@@ -287,15 +287,15 @@ Acceptance criteria:
 Primary files: lesson planning/validation models and provider prompts; extend
 the existing generic relation validators.
 
-- [ ] Add optional source/reference inputs and retain claim-level provenance in
+- [x] Add optional source/reference inputs and retain claim-level provenance in
   the lesson plan.
-- [ ] Validate generated claims and relation directions against supplied
+- [x] Validate generated claims and relation directions against supplied
   sources when sources are present.
-- [ ] Add a plugin-style domain-validator interface; start only with domains
+- [x] Add a plugin-style domain-validator interface; start only with domains
   represented in the benchmark and with clear deterministic invariants.
-- [ ] Route unsupported or low-confidence claims to a review/failure state
+- [x] Route unsupported or low-confidence claims to a review/failure state
   instead of inventing a relation.
-- [ ] Preserve the existing compatibility, mechanism-chain, dependency,
+- [x] Preserve the existing compatibility, mechanism-chain, dependency,
   containment, and normalization checks as the generic layer.
 
 Acceptance criteria:

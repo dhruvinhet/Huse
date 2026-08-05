@@ -75,6 +75,18 @@ class GeminiLessonPlanner:
             "such as $defs, $schema, definitions, $ref, properties, or required "
             "inside concept_graph."
         )
+        if request.sources:
+            instructions += (
+                " The request includes authoritative sources. Copy their source "
+                "records into lesson.sources without changing IDs or assertions. "
+                "Create claim-level lesson.claims for factual definitions and "
+                "relations; every claim must cite source_ids, every concept node "
+                "and edge must reference its supporting claim_ids, and confidence "
+                "must reflect the evidence. Preserve relation direction exactly "
+                "as stated by source relation_assertions. If a claim or relation "
+                "is not supported, mark its claim status review instead of "
+                "inventing support."
+            )
         lesson = self._agent.generate(
             instructions,
             request.model_dump(mode="json"),

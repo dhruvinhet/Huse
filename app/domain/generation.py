@@ -7,6 +7,7 @@ from typing import Generic, Literal, TypeVar
 from pydantic import Field
 
 from app.models.base import BaseModel, NonEmptyString
+from app.domain.lesson import SourceReference
 
 
 class PipelineVersion(str, Enum):
@@ -55,6 +56,7 @@ class GenerationRequest(BaseModel):
     language: NonEmptyString = "en-US"
     voice: NonEmptyString = "en-US-AriaNeural"
     output: OutputProfile = Field(default_factory=OutputProfile)
+    sources: list[SourceReference] = Field(default_factory=list, max_length=32)
 
 
 class GenerationResult(BaseModel):

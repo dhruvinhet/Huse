@@ -33,6 +33,9 @@ from app.domain.lesson import (
     ConceptNode,
     ConceptRelation,
     LessonPlan,
+    FactualClaim,
+    SourceReference,
+    SourceRelationAssertion,
 )
 from app.domain.motion import MotionEvent, MotionPlan
 from app.domain.narration import (
@@ -58,6 +61,12 @@ from app.domain.operations import (
     TransferAction,
     TransformAction,
     VisualOperation,
+)
+from app.domain.grounding import (
+    FactualGroundingError,
+    GroundingDecision,
+    GroundingIssue,
+    GroundingReport,
 )
 from app.domain.pedagogy import PedagogyMode, PedagogyPlan, PedagogyShot
 from app.domain.quality import (
@@ -126,8 +135,13 @@ __all__ = [
     "ConstraintType",
     "EvaluationDecision",
     "FindingSeverity",
+    "FactualClaim",
+    "FactualGroundingError",
     "GenerationRequest",
     "GenerationResult",
+    "GroundingDecision",
+    "GroundingIssue",
+    "GroundingReport",
     "GroupAction",
     "LaidOutNode",
     "LayoutBox",
@@ -161,6 +175,8 @@ __all__ = [
     "RouteAction",
     "SemanticAction",
     "ShotSpec",
+    "SourceReference",
+    "SourceRelationAssertion",
     "SplitAction",
     "Storyboard",
     "TemplateMatch",

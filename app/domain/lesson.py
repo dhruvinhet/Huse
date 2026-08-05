@@ -21,6 +21,35 @@ class ConceptRelation(str, Enum):
     FLOWS_TO = "flows_to"
 
 
+class SourceRelationAssertion(BaseModel):
+    """One directed relation explicitly asserted by a supplied source."""
+
+    assertion_id: NonEmptyString
+    subject: NonEmptyString
+    relation: ConceptRelation
+    object: NonEmptyString
+
+
+class SourceReference(BaseModel):
+    """Optional user-supplied grounding material with stable identity."""
+
+    source_id: NonEmptyString
+    title: NonEmptyString
+    content: NonEmptyString
+    url: str | None = None
+    relation_assertions: list[SourceRelationAssertion] = Field(default_factory=list)
+
+
+class FactualClaim(BaseModel):
+    """A lesson claim traceable to one or more supplied references."""
+
+    claim_id: NonEmptyString
+    text: NonEmptyString
+    source_ids: list[NonEmptyString] = Field(min_length=1)
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    status: Literal["supported", "review"] = "supported"
+
+
 _FLOW_RELATION_LABELS = frozenset({
     "communicate", "connect", "interface", "output", "pass", "provide",
     "read", "receive", "request", "respond", "send", "signal", "supply",
@@ -191,6 +220,7 @@ class ConceptNode(BaseModel):
     prerequisites: list[NonEmptyString] = Field(default_factory=list)
     teaching_order: int = Field(ge=0)
     visual_affordances: list[NonEmptyString] = Field(default_factory=list)
+    claim_ids: list[NonEmptyString] = Field(default_factory=list)
 
 
 class ConceptEdge(BaseModel):
@@ -201,6 +231,7 @@ class ConceptEdge(BaseModel):
     target_id: NonEmptyString
     relation: ConceptRelation
     label: str | None = None
+    claim_ids: list[NonEmptyString] = Field(default_factory=list)
 
 
 class ConceptGraph(BaseModel):
@@ -315,3 +346,30 @@ class LessonPlan(BaseModel):
     concept_graph: ConceptGraph
     misconceptions: list[NonEmptyString] = Field(default_factory=list)
     assessment_prompts: list[NonEmptyString] = Field(default_factory=list)
+    sources: list[SourceReference] = Field(default_factory=list)
+    claims: list[FactualClaim] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_claim_provenance(self) -> Self:
+        source_ids = [source.source_id for source in self.sources]
+        claim_ids = [claim.claim_id for claim in self.claims]
+        if len(source_ids) != len(set(source_ids)):
+            raise ValueError("lesson source IDs must be unique")
+        if len(claim_ids) != len(set(claim_ids)):
+            raise ValueError("lesson claim IDs must be unique")
+        known_sources = set(source_ids)
+        known_claims = set(claim_ids)
+        for claim in self.claims:
+            unknown = set(claim.source_ids) - known_sources
+            if unknown and known_sources:
+                raise ValueError(
+                    f"claim {claim.claim_id!r} references unknown sources: "
+                    f"{sorted(unknown)}"
+                )
+        for item in [*self.concept_graph.nodes, *self.concept_graph.edges]:
+            unknown = set(item.claim_ids) - known_claims
+            if unknown:
+                raise ValueError(
+                    f"concept item references unknown claims: {sorted(unknown)}"
+                )
+        return self
