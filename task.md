@@ -218,14 +218,14 @@ Primary files: `app/domain/visual_intent.py`, `app/domain/strategy.py`,
 `app/planning/visual_intent_compiler.py`, and
 `app/planning/template_compiler.py`.
 
-- [ ] Define a bounded `VisualProgram` with shared objects plus per-shot roots,
+- [x] Define a bounded `VisualProgram` with shared objects plus per-shot roots,
   operator instances, state references, and action obligations.
-- [ ] Remove the `len(operators) == 1` compiler restriction.
-- [ ] Allow a reviewed template to own one section/shot rather than forcing one
+- [x] Remove the `len(operators) == 1` compiler restriction.
+- [x] Allow a reviewed template to own one section/shot rather than forcing one
   template root across the whole lesson.
-- [ ] Define deterministic composition/ownership rules for cross-template
+- [x] Define deterministic composition/ownership rules for cross-template
   objects, connectors, IDs, layout regions, and cleanup.
-- [ ] Keep low-level renderer objects out of model output; the compiler remains
+- [x] Keep low-level renderer objects out of model output; the compiler remains
   authoritative.
 
 Acceptance criteria:

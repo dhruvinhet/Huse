@@ -87,6 +87,20 @@ class TemplateCompiler:
     ) -> CompiledTemplateProgram | None:
         """Return a deterministic program for the strongest match, if any."""
 
+        section_selections = self._select_for_shots(
+            lesson,
+            strategies,
+            matches,
+            pedagogy,
+        )
+        if len({item.template_id for item in section_selections}) > 1:
+            return self._compile_sections(
+                lesson,
+                section_selections,
+                library,
+                pedagogy,
+                target_duration,
+            )
         selection = self._select(lesson, strategies, matches)
         if selection is None:
             return None
@@ -121,7 +135,157 @@ class TemplateCompiler:
         )
         return CompiledTemplateProgram(
             template_id=selection.template_id,
+            template_ids=[selection.template_id],
+            shot_template_ids={
+                shot.shot_id: selection.template_id for shot in pedagogy.shots
+            },
             parameters=parameters,
+            pedagogy_mode=pedagogy.mode,
+            storyboard=storyboard,
+        )
+
+    def _select_for_shots(
+        self,
+        lesson: LessonPlan,
+        strategies: list[VisualStrategy],
+        matches: list[TemplateMatch],
+        pedagogy: PedagogyPlan,
+    ) -> list[TemplateMatch]:
+        """Choose a compatible reviewed family independently for each shot."""
+
+        if not matches:
+            return []
+        preferred = {
+            item.preferred_template
+            for item in strategies
+            if item.preferred_template is not None
+        }
+        groups = self._shot_concept_groups(lesson, pedagogy)
+        selections: list[TemplateMatch] = []
+        for concepts in groups:
+            required = set(concepts)
+
+            def rank(match: TemplateMatch) -> tuple[float, float, str]:
+                overlap = len(required.intersection(match.concept_ids)) / max(
+                    1, len(required)
+                )
+                preference = 0.08 if match.template_id in preferred else 0.0
+                return match.score + 0.30 * overlap + preference, overlap, match.template_id
+
+            selections.append(max(matches, key=rank))
+        return selections
+
+    def _compile_sections(
+        self,
+        lesson: LessonPlan,
+        selections: list[TemplateMatch],
+        library: TemplateLibrary,
+        pedagogy: PedagogyPlan,
+        target_duration: float,
+    ) -> CompiledTemplateProgram:
+        """Instantiate shot-owned reviewed roots and lower deterministic cleanup."""
+
+        groups = self._shot_concept_groups(lesson, pedagogy)
+        roots: list[VisualObjectSpec] = []
+        section_parameters: list[dict[str, object]] = []
+        for index, (selection, concepts) in enumerate(
+            zip(selections, groups, strict=True)
+        ):
+            parameters = self._validated_parameters(selection, lesson)
+            parameters["object_id"] = (
+                f"template_{index:02d}_{self._safe_id(selection.template_id)}"
+            )
+            parameters = bound_semantic_operands(
+                parameters,
+                preferred_concept_ids=concepts or selection.concept_ids,
+            )
+            root = library.instantiate(selection.template_id, parameters)
+            root = self._mark_connector_ownership(
+                self._ground_object(root, lesson)
+            )
+            root.content.update({
+                "template_id": selection.template_id,
+                "ownership": "shot",
+                "shot_id": pedagogy.shots[index].shot_id,
+            })
+            roots.append(root)
+            section_parameters.append(parameters)
+
+        beats: list[VisualBeat] = []
+        for index, (shot, root, concept_ids) in enumerate(
+            zip(pedagogy.shots, roots, groups, strict=True)
+        ):
+            operations: list[VisualOperation] = []
+            if index > 0:
+                operations.append(VisualOperation(
+                    operation_id=f"cleanup_template_{index:02d}",
+                    operation=OperationType.HIDE,
+                    target_ids=[item.object_id for item in roots[index - 1].flatten()],
+                ))
+            operations.append(VisualOperation(
+                operation_id=f"create_template_{index:02d}",
+                operation=OperationType.CREATE,
+                target_ids=[root.object_id],
+                arguments={"objects": [root.model_dump(mode="json")]},
+            ))
+            targets = [
+                item.object_id
+                for item in root.flatten()
+                if item.kind != "connector"
+                and set(item.concept_ids).intersection(concept_ids)
+            ] or [root.object_id]
+            operations.append(VisualOperation(
+                operation_id=f"highlight_template_{index:02d}",
+                operation=OperationType.HIGHLIGHT,
+                target_ids=list(dict.fromkeys(targets)),
+            ))
+            beats.append(VisualBeat(
+                beat_id=f"shot_{index + 1:02d}_{shot.shot_id}",
+                section_id=f"pedagogy_{pedagogy.mode.value}",
+                concept_ids=concept_ids,
+                teaching_intent=shot.visual_obligation,
+                phrase_intent=self._phrase_intent(
+                    shot.purpose,
+                    concept_ids,
+                    lesson,
+                    shot.narration_obligation,
+                    pedagogy.mode.value,
+                ),
+                purpose=shot.purpose,
+                estimated_duration=max(2.0, target_duration / len(pedagogy.shots)),
+                operations=operations,
+                attention=[AttentionCue(
+                    cue="focus",
+                    target_ids=list(dict.fromkeys(targets)),
+                    intensity=0.8,
+                )],
+                camera_intent=CameraIntent(
+                    operation=shot.camera_operation,
+                    target_ids=[root.object_id],
+                ),
+                shot_plan=ShotPlan.for_purpose(shot.purpose).model_copy(
+                    update={"cleanup_policy": "retain"}
+                ),
+            ))
+        storyboard = Storyboard(
+            document_id=f"compiled_multi_{self._safe_id(lesson.title)}",
+            title=lesson.title,
+            beats=beats,
+            final_learning_summary=[
+                f"{node.label}: {node.definition}"
+                for node in lesson.concept_graph.nodes
+                if node.importance >= 0.5
+            ],
+        )
+        template_ids = list(dict.fromkeys(item.template_id for item in selections))
+        return CompiledTemplateProgram(
+            template_id=template_ids[0],
+            template_ids=template_ids,
+            shot_template_ids={
+                shot.shot_id: selection.template_id
+                for shot, selection in zip(pedagogy.shots, selections, strict=True)
+            },
+            parameters={"sections": section_parameters},
             pedagogy_mode=pedagogy.mode,
             storyboard=storyboard,
         )

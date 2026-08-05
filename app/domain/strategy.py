@@ -39,6 +39,10 @@ class CompiledTemplateProgram(BaseModel):
     """Record an authoritative reviewed-template visual program."""
 
     template_id: NonEmptyString
+    template_ids: list[NonEmptyString] = Field(default_factory=list)
+    shot_template_ids: dict[NonEmptyString, NonEmptyString] = Field(
+        default_factory=dict
+    )
     parameters: dict[str, object] = Field(default_factory=dict)
     pedagogy_mode: PedagogyMode
     storyboard: Storyboard

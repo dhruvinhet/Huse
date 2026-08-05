@@ -11,9 +11,11 @@ from app.domain.lesson import (
 from app.domain.operations import OperationType
 from app.domain.storyboard import VisualObjectSpec
 from app.domain.strategy import TemplateMatch
+from app.domain.visual_document import ObjectLifecycle
 from app.planning import PedagogyRouter, TemplateCompiler
 from app.templates import TemplateRegistry
 from app.templates.builtins import builtin_templates
+from app.state import VisualStateTransitionEngine
 
 
 def _binary_search_lesson() -> LessonPlan:
@@ -81,6 +83,49 @@ class PoisonedPrototypeLibrary:
                     content={"label": "Trusted"},
                     accessibility_label="Trusted component",
                 )
+            ],
+        )
+
+
+class SectionTemplateLibrary:
+    """Create deterministic shot-scoped roots for multi-template tests."""
+
+    def instantiate(self, template_id, parameters):
+        root_id = str(parameters["object_id"])
+        left_id = f"{root_id}_input"
+        right_id = f"{root_id}_output"
+        return VisualObjectSpec(
+            object_id=root_id,
+            kind="nested_group",
+            semantic_role="reviewed_section",
+            content={"operator": "flow", "layout": "horizontal"},
+            accessibility_label=f"{template_id} reviewed section",
+            children=[
+                VisualObjectSpec(
+                    object_id=left_id,
+                    kind="component",
+                    semantic_role="source",
+                    content={"label": "Input"},
+                    accessibility_label="Input",
+                ),
+                VisualObjectSpec(
+                    object_id=right_id,
+                    kind="component",
+                    semantic_role="target",
+                    content={"label": "Output"},
+                    accessibility_label="Output",
+                ),
+                VisualObjectSpec(
+                    object_id=f"{root_id}_connector",
+                    kind="connector",
+                    semantic_role="relation",
+                    content={
+                        "source_id": left_id,
+                        "target_id": right_id,
+                        "relation": "transforms_to",
+                    },
+                    accessibility_label="Input transforms to output",
+                ),
             ],
         )
 
@@ -167,6 +212,94 @@ def test_builtin_match_compiles_complete_visual_program() -> None:
     assert [beat.teaching_intent for beat in program.storyboard.beats] == [
         shot.visual_obligation for shot in route.shots
     ]
+
+
+def test_templates_can_be_owned_by_individual_shots() -> None:
+    """Concept-specific matches compose without duplicate IDs or stale sections."""
+
+    lesson = LessonPlan(
+        title="Section-owned templates",
+        summary="Input transforms to output.",
+        concept_graph=ConceptGraph(
+            objectives=["Explain the transformation"],
+            nodes=[
+                ConceptNode(
+                    concept_id="input",
+                    label="Input",
+                    definition="The initial state.",
+                    importance=1,
+                    teaching_order=0,
+                ),
+                ConceptNode(
+                    concept_id="output",
+                    label="Output",
+                    definition="The resulting state.",
+                    importance=1,
+                    teaching_order=1,
+                    prerequisites=["input"],
+                ),
+            ],
+            edges=[ConceptEdge(
+                edge_id="transform",
+                source_id="input",
+                target_id="output",
+                relation=ConceptRelation.TRANSFORMS_TO,
+            )],
+            teaching_sequence=["input", "output"],
+        ),
+    )
+    route = PedagogyRouter().route(
+        lesson,
+        AudienceProfile(learning_goal="Understand the transformation"),
+    )
+    matches = [
+        TemplateMatch(
+            template_id="input_section.v1",
+            concept_ids=["input"],
+            score=0.91,
+            reason="Input introduction",
+        ),
+        TemplateMatch(
+            template_id="output_section.v1",
+            concept_ids=["output"],
+            score=0.95,
+            reason="Output transformation",
+        ),
+    ]
+
+    program = TemplateCompiler().compile(
+        lesson,
+        [],
+        matches,
+        SectionTemplateLibrary(),
+        route,
+    )
+
+    assert program is not None
+    assert set(program.template_ids) == {
+        "input_section.v1",
+        "output_section.v1",
+    }
+    assert len(program.shot_template_ids) == len(route.shots)
+    created = [
+        VisualObjectSpec.model_validate(root)
+        for beat in program.storyboard.beats
+        for operation in beat.operations
+        if operation.operation is OperationType.CREATE
+        for root in operation.arguments["objects"]
+    ]
+    object_ids = [item.object_id for root in created for item in root.flatten()]
+    assert len(object_ids) == len(set(object_ids))
+    document = VisualStateTransitionEngine().materialize(program.storyboard)
+    assert (
+        document.states[1].object_states[created[0].object_id].lifecycle
+        is ObjectLifecycle.HIDDEN
+    )
+    for state in document.states:
+        for item in state.object_states.values():
+            if item.kind == "connector":
+                assert item.content["source_id"] in state.object_states
+                assert item.content["target_id"] in state.object_states
 
 
 def test_compiler_bounds_oversized_semantic_graph_before_validation() -> None:

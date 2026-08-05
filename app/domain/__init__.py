@@ -66,10 +66,13 @@ from app.domain.visual_document import (
     VisualState,
 )
 from app.domain.visual_intent import (
+    OperatorInstance,
     RendererOperator,
     ShotSpec,
     VisualIntent,
     VisualIntentPatch,
+    VisualProgram,
+    VisualProgramShot,
 )
 
 __all__ = [
@@ -109,6 +112,7 @@ __all__ = [
     "NarrationPlan",
     "ObjectLifecycle",
     "ObjectState",
+    "OperatorInstance",
     "OperationType",
     "OutputProfile",
     "PedagogyMode",
@@ -132,6 +136,8 @@ __all__ = [
     "VisualDocument",
     "VisualIntent",
     "VisualIntentPatch",
+    "VisualProgram",
+    "VisualProgramShot",
     "VisualObjectSpec",
     "VisualOperation",
     "VisualState",
