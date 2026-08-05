@@ -57,7 +57,9 @@ def test_layout_motion_camera_and_quality_form_valid_plan() -> None:
         "compiled",
         motion,
         {
-            "concept_graph": concept_graph(),
+            # This fixture intentionally contains no connector; keep this test
+            # focused on layout/motion by evaluating a relation-free graph.
+            "concept_graph": concept_graph().model_copy(update={"edges": []}),
             "storyboard": board,
             "assets": ResolvedAssetSet(),
             "document": document,

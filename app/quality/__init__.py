@@ -7,7 +7,7 @@ from app.quality.multimodal import (
     VisionLanguageClient,
 )
 from app.quality.gemini_vision import GeminiVisionClient
-from app.quality.policy import QualityPolicy
+from app.quality.policy import QualityPolicy, QualityReviewPolicy
 from app.quality.storyboard_critic import GeminiStoryboardCritic
 from app.quality.educational import EducationalQualityEvaluator
 from app.quality.visual import VisualQualityEvaluator
@@ -20,6 +20,7 @@ __all__ = [
     "GeminiVisionClient",
     "MultimodalFrameEvaluator",
     "QualityPolicy",
+    "QualityReviewPolicy",
     "VisionLanguageClient",
     "EducationalQualityEvaluator",
     "VisualQualityEvaluator",

@@ -2,9 +2,11 @@
 
 from app.domain.assets import ResolvedAssetSet
 from app.domain.generation import AudienceProfile
+from app.domain.camera import CameraPlan
 from app.domain.layout import LaidOutNode, LayoutPlan
 from app.domain.lesson import ConceptGraph
 from app.domain.motion import MotionPlan
+from app.domain.narration import AlignedAudio
 from app.domain.quality import (
     EvaluationDecision,
     FindingSeverity,
@@ -55,6 +57,8 @@ class DeterministicQualityEvaluator:
             else self._typed(context.get("document"), VisualDocument)
         )
         audience = self._typed(context.get("audience"), AudienceProfile)
+        camera = self._typed(context.get("camera"), CameraPlan)
+        alignment = self._typed(context.get("alignment"), AlignedAudio)
 
         findings: list[QualityFinding] = []
         scores: dict[str, float] = {}
@@ -91,8 +95,26 @@ class DeterministicQualityEvaluator:
             document,
             findings,
         )
-        scores["diagram_correctness"] = 1.0
-        scores["alignment"] = 1.0 if motion is not None else 0.5
+        scores["diagram_correctness"] = self._diagram_correctness(
+            artifact_id,
+            graph,
+            document,
+            findings,
+        )
+        scores["alignment"] = self._alignment_quality(
+            artifact_id,
+            storyboard,
+            motion,
+            camera,
+            alignment,
+            findings,
+        )
+        scores["semantic_state_delta"] = self._semantic_state_delta(
+            artifact_id,
+            storyboard,
+            document,
+            findings,
+        )
         scores["visual_density"] = self._density_quality(
             artifact_id,
             storyboard,
@@ -417,6 +439,219 @@ class DeterministicQualityEvaluator:
                 )
             )
         return max(0.0, 1.0 - 0.15 * len(violations))
+
+    @staticmethod
+    def _diagram_correctness(
+        artifact_id: str,
+        graph: ConceptGraph | None,
+        document: VisualDocument | None,
+        findings: list[QualityFinding],
+    ) -> float:
+        """Validate actual connector endpoints and direction against graph facts."""
+
+        if graph is None or document is None or not document.states:
+            return 0.5
+        states = document.states[-1].object_states
+        concept_ids = {
+            object_id: set(item.metadata.get("concept_ids", []))
+            if isinstance(item.metadata.get("concept_ids"), list)
+            else set()
+            for object_id, item in states.items()
+        }
+        directed_relations = {
+            (edge.source_id, edge.target_id) for edge in graph.edges
+        }
+        connectors = [
+            item for item in states.values() if item.kind == "connector"
+        ]
+        if not connectors:
+            if graph.edges:
+                findings.append(QualityFinding(
+                    code="required_relations_not_visualized",
+                    severity=FindingSeverity.ERROR,
+                    artifact_id=artifact_id,
+                    message=(
+                        f"The concept graph declares {len(graph.edges)} relations, "
+                        "but the final visual document contains no connector."
+                    ),
+                    repair_target="storyboard",
+                    repair_scope="artifact",
+                    measured_value=0.0,
+                    required_value=1.0,
+                    patch_paths=["/beats"],
+                ))
+                return 0.0
+            return 1.0
+
+        valid = 0
+        for connector in connectors:
+            source_id = connector.content.get("source_id")
+            target_id = connector.content.get("target_id")
+            if not isinstance(source_id, str) or not isinstance(target_id, str) or (
+                source_id not in states or target_id not in states
+            ):
+                findings.append(QualityFinding(
+                    code="connector_endpoint_missing",
+                    severity=FindingSeverity.ERROR,
+                    artifact_id=artifact_id,
+                    message=(
+                        f"Connector {connector.object_id} references missing or "
+                        "invalid endpoints: {source_id!r} -> {target_id!r}."
+                    ),
+                    repair_target="storyboard",
+                    repair_scope="object",
+                    object_ids=[connector.object_id],
+                    patch_paths=["/beats"],
+                ))
+                continue
+            source_concepts = concept_ids.get(source_id, set())
+            target_concepts = concept_ids.get(target_id, set())
+            forward = {
+                (source, target)
+                for source in source_concepts
+                for target in target_concepts
+            }
+            if forward.intersection(directed_relations):
+                valid += 1
+                continue
+            reverse = {(target, source) for source, target in forward}
+            if reverse.intersection(directed_relations):
+                code = "connector_relation_reversed"
+                message = (
+                    f"Connector {connector.object_id} points {source_id} -> "
+                    f"{target_id}, opposite to the grounded concept relation."
+                )
+            else:
+                code = "connector_relation_ungrounded"
+                message = (
+                    f"Connector {connector.object_id} has no directed relation "
+                    "in the lesson concept graph."
+                )
+            findings.append(QualityFinding(
+                code=code,
+                severity=FindingSeverity.ERROR,
+                artifact_id=artifact_id,
+                message=message,
+                repair_target="storyboard",
+                repair_scope="object",
+                object_ids=[connector.object_id, source_id, target_id],
+                patch_paths=["/beats"],
+            ))
+        return valid / len(connectors)
+
+    @staticmethod
+    def _alignment_quality(
+        artifact_id: str,
+        storyboard: Storyboard | None,
+        motion: MotionPlan | None,
+        camera: CameraPlan | None,
+        alignment: AlignedAudio | None,
+        findings: list[QualityFinding],
+    ) -> float:
+        """Measure whether motion and camera cues fit their narrated beat windows."""
+
+        if storyboard is None or alignment is None:
+            return 0.5
+        windows: dict[str, tuple[float, float]] = {}
+        for beat in storyboard.beats:
+            phrases = [
+                item for item in alignment.phrases if item.beat_id == beat.beat_id
+            ]
+            if phrases:
+                windows[beat.beat_id] = (
+                    min(item.audio_start for item in phrases),
+                    max(item.audio_end for item in phrases),
+                )
+        events = list(motion.events) if motion is not None else []
+        cues = list(camera.cues) if camera is not None else []
+        scheduled = [*events, *cues]
+        if not scheduled:
+            return 0.0
+        invalid: list[object] = []
+        for item in scheduled:
+            window = windows.get(item.beat_id)
+            if window is None or item.start_time < window[0] - 1e-6 or (
+                item.start_time + item.duration > window[1] + 1e-6
+            ):
+                invalid.append(item)
+        if invalid:
+            beat_ids = sorted({item.beat_id for item in invalid})
+            findings.append(QualityFinding(
+                code="narration_visual_alignment_invalid",
+                severity=FindingSeverity.ERROR,
+                artifact_id=artifact_id,
+                message=(
+                    f"{len(invalid)} of {len(scheduled)} motion/camera events "
+                    f"fall outside their narrated beat windows: {beat_ids}."
+                ),
+                repair_target="motion",
+                repair_scope="stage",
+                object_ids=[],
+                measured_value=float(len(invalid)),
+                required_value=0.0,
+                patch_paths=["/events", "/cues"],
+            ))
+        return 1.0 - len(invalid) / len(scheduled)
+
+    @staticmethod
+    def _semantic_state_delta(
+        artifact_id: str,
+        storyboard: Storyboard | None,
+        document: VisualDocument | None,
+        findings: list[QualityFinding],
+    ) -> float:
+        """Require transform beats to change semantic content or structure."""
+
+        if storyboard is None or document is None:
+            return 0.5
+        state_by_beat = {
+            state.beat_id: index for index, state in enumerate(document.states)
+        }
+        transform_beats = [
+            beat for beat in storyboard.beats if beat.purpose == "transform"
+        ]
+        if not transform_beats:
+            return 1.0
+
+        def signature(index: int) -> tuple[tuple[object, ...], ...]:
+            return tuple(sorted(
+                (
+                    object_id,
+                    item.kind,
+                    repr(sorted(item.content.items())),
+                    item.parent_id,
+                    tuple(item.child_ids),
+                )
+                for object_id, item in document.states[index].object_states.items()
+            ))
+
+        changed = 0
+        for beat in transform_beats:
+            index = state_by_beat.get(beat.beat_id)
+            if index is not None and index > 0 and signature(index) != signature(index - 1):
+                changed += 1
+                continue
+            findings.append(QualityFinding(
+                code="semantic_state_delta_missing",
+                severity=FindingSeverity.ERROR,
+                artifact_id=artifact_id,
+                message=(
+                    f"Transform beat {beat.beat_id} changes presentation state "
+                    "but not semantic content or structure."
+                ),
+                repair_target="storyboard",
+                repair_scope="beat",
+                beat_id=beat.beat_id,
+                object_ids=sorted({
+                    target
+                    for operation in beat.operations
+                    for target in operation.target_ids
+                }),
+                measured_value=0.0,
+                required_value=1.0,
+                patch_paths=[f"/beats/{state_by_beat.get(beat.beat_id, 0)}/operations"],
+            ))
+        return changed / len(transform_beats)
 
     def _flatten(self, root: LaidOutNode) -> list[LaidOutNode]:
         """Flatten one layout hierarchy."""

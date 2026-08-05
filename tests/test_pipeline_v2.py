@@ -231,7 +231,10 @@ def test_v2_pipeline_compiles_semantics_to_composition(tmp_path: Path) -> None:
         narration_writer=FakeNarrationWriter(),
         knowledge_base=FakeKnowledge(),
         template_library=FakeTemplates(),
-        speech_synthesizer=FakeSpeech(),
+        # Honest relation QA can replace the two-beat provider fixture with a
+        # four-beat deterministic storyboard; synthesize per phrase so both
+        # valid paths remain alignable.
+        speech_synthesizer=DynamicFakeSpeech(),
         phrase_aligner=ScenePhraseAligner(),
         render_engine=renderer,
         composition_engine=composer,
@@ -249,7 +252,11 @@ def test_v2_pipeline_compiles_semantics_to_composition(tmp_path: Path) -> None:
 
     assert result.total_frames == 8
     assert result.quality_score == 1
-    assert renderer.job.document.states[-1].object_states["output_box"].lifecycle.value == "emphasized"
+    assert any(
+        "output" in item.metadata.get("concept_ids", [])
+        for state in renderer.job.document.states
+        for item in state.object_states.values()
+    )
     assert composer.job.audio.duration == 4
     assert runner.last_execution_time > 0
     assert "Plan Lesson" in runner.stage_timings
@@ -289,10 +296,10 @@ def test_v2_pipeline_survives_invalid_storyboard_and_narration(
     assert renderer.job.document.states[-1].beat_id == "beat_summary"
 
 
-def test_v2_pipeline_uses_compiled_template_without_storyboard_model(
+def test_v2_pipeline_rejects_highlight_only_compiled_template_without_model(
     tmp_path: Path,
 ) -> None:
-    """A reviewed match becomes the production visual program directly."""
+    """A reviewed match still bypasses the model but must pass action QA."""
 
     from app.audio import ScenePhraseAligner
     from app.templates import TemplateRegistry
@@ -323,7 +330,14 @@ def test_v2_pipeline_uses_compiled_template_without_storyboard_model(
     assert result.total_frames > 0
     assert "Compile Matched Template" in runner.stage_timings
     assert "Plan Storyboard" not in runner.stage_timings
-    assert renderer.job.document.document_id.startswith("compiled_")
+    assert not renderer.job.document.document_id.startswith("compiled_")
+    assert "Build Deterministic Storyboard Fallback" in runner.stage_timings
+    compiled_report = runner.last_artifacts[
+        "v2/quality/compiled_attempt_0.json"
+    ]
+    assert "semantic_state_delta_missing" in {
+        finding.code for finding in compiled_report.findings
+    }
     assert len(renderer.job.document.states) == 4
 
 

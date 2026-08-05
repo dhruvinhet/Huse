@@ -14,6 +14,7 @@ from app.domain.quality import (
     QualityReport,
 )
 from app.domain.storyboard import Storyboard, VisualObjectSpec
+from app.domain.visual_document import ObjectLifecycle, VisualDocument
 from app.planning.graph_semantics import analyze_graph
 
 
@@ -33,6 +34,7 @@ class EducationalQualityEvaluator:
         audience = context.get("audience")
         narration = context.get("narration")
         pedagogy = context.get("pedagogy")
+        document = context.get("document")
         if not isinstance(storyboard, Storyboard):
             return QualityReport(
                 overall_score=1.0,
@@ -66,6 +68,12 @@ class EducationalQualityEvaluator:
             artifact_id,
             findings,
         )
+        obligation_support = self._obligation_support(
+            storyboard,
+            document,
+            artifact_id,
+            findings,
+        )
         scores = {
             "teaching_progression": progression,
             "worked_examples": examples,
@@ -74,6 +82,7 @@ class EducationalQualityEvaluator:
             "semantic_fidelity": semantic_fidelity,
             "visual_progression": visual_progression,
             "graph_sufficiency": graph_sufficiency,
+            "visual_obligation_support": obligation_support,
         }
         decision = (
             EvaluationDecision.REPAIR
@@ -320,6 +329,111 @@ class EducationalQualityEvaluator:
             ))
             return 0.35
         return 1.0
+
+    @staticmethod
+    def _obligation_support(
+        storyboard: Storyboard,
+        document: object,
+        artifact_id: str,
+        findings: list[QualityFinding],
+    ) -> float:
+        """Require each compiled beat to visibly represent its concepts/action."""
+
+        if not isinstance(document, VisualDocument):
+            return 0.5
+        states = {state.beat_id: state for state in document.states}
+        semantic_operations = {
+            OperationType.UPDATE,
+            OperationType.MOVE,
+            OperationType.RESIZE,
+            OperationType.MORPH,
+            OperationType.DUPLICATE,
+            OperationType.CONNECT,
+            OperationType.DISCONNECT,
+            OperationType.ERASE,
+            OperationType.GROUP,
+            OperationType.UNGROUP,
+        }
+        passed = 0
+        checks = 0
+        for index, beat in enumerate(storyboard.beats):
+            state = states.get(beat.beat_id)
+            checks += 1
+            if state is None:
+                findings.append(QualityFinding(
+                    code="visual_obligation_state_missing",
+                    severity=FindingSeverity.ERROR,
+                    artifact_id=artifact_id,
+                    message=f"Beat {beat.beat_id} has no materialized visual state.",
+                    repair_target="state",
+                    repair_scope="beat",
+                    beat_id=beat.beat_id,
+                    patch_paths=[f"/beats/{index}"],
+                ))
+                continue
+            visible_concepts = {
+                concept_id
+                for item in state.object_states.values()
+                if item.lifecycle not in {
+                    ObjectLifecycle.HIDDEN,
+                    ObjectLifecycle.REMOVED,
+                }
+                for concept_id in (
+                    item.metadata.get("concept_ids", [])
+                    if isinstance(item.metadata.get("concept_ids"), list)
+                    else []
+                )
+            }
+            missing = sorted(set(beat.concept_ids) - visible_concepts)
+            if missing:
+                findings.append(QualityFinding(
+                    code="visual_obligation_unrepresented",
+                    severity=FindingSeverity.ERROR,
+                    artifact_id=artifact_id,
+                    message=(
+                        f"Beat {beat.beat_id} declares concepts {missing}, but "
+                        "they are not visible in its materialized state."
+                    ),
+                    repair_target="storyboard",
+                    repair_scope="beat",
+                    beat_id=beat.beat_id,
+                    measured_value=float(len(beat.concept_ids) - len(missing)),
+                    required_value=float(len(beat.concept_ids)),
+                    patch_paths=[f"/beats/{index}/operations"],
+                ))
+            else:
+                passed += 1
+
+            if beat.purpose != "transform":
+                continue
+            checks += 1
+            if any(
+                operation.operation in semantic_operations
+                for operation in beat.operations
+            ):
+                passed += 1
+                continue
+            findings.append(QualityFinding(
+                code="visual_obligation_action_missing",
+                severity=FindingSeverity.ERROR,
+                artifact_id=artifact_id,
+                message=(
+                    f"Transform beat {beat.beat_id} contains only presentation "
+                    "operations and cannot enact its visual obligation."
+                ),
+                repair_target="storyboard",
+                repair_scope="beat",
+                beat_id=beat.beat_id,
+                object_ids=sorted({
+                    target
+                    for operation in beat.operations
+                    for target in operation.target_ids
+                }),
+                measured_value=0.0,
+                required_value=1.0,
+                patch_paths=[f"/beats/{index}/operations"],
+            ))
+        return passed / checks if checks else 1.0
 
     @staticmethod
     def _graph_sufficiency(

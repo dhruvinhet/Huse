@@ -7,6 +7,7 @@ from app.domain.quality import (
     QualityFinding,
     QualityReport,
 )
+from app.domain.visual_document import VisualDocument
 
 
 class VisualQualityEvaluator:
@@ -30,6 +31,12 @@ class VisualQualityEvaluator:
         findings: list[QualityFinding] = []
         checked = 0
         violations = 0
+        document = context.get("document")
+        document_states = (
+            {state.state_id: state for state in document.states}
+            if isinstance(document, VisualDocument)
+            else {}
+        )
         for state_id, root in layout.state_roots.items():
             for content_root in root.children:
                 width_ratio = content_root.box.width / layout.viewport.width
@@ -99,6 +106,32 @@ class VisualQualityEvaluator:
                                 f"Sibling objects {first.object_id} and {second.object_id} overlap by {overlap:.0%}.",
                             )
                         )
+            state = document_states.get(state_id)
+            if state is not None:
+                crossings = self._connector_crossings(root, state.object_states)
+                checked += max(1, len(crossings))
+                if crossings:
+                    violations += len(crossings)
+                    connector_ids = sorted({
+                        connector_id
+                        for pair in crossings
+                        for connector_id in pair
+                    })
+                    findings.append(QualityFinding(
+                        code="connector_crossing",
+                        severity=FindingSeverity.ERROR,
+                        artifact_id=artifact_id,
+                        message=(
+                            f"{len(crossings)} connector pairs geometrically cross "
+                            f"in {state_id}: {crossings}."
+                        ),
+                        repair_target="layout",
+                        repair_scope="object",
+                        object_ids=connector_ids,
+                        measured_value=float(len(crossings)),
+                        required_value=0.0,
+                        patch_paths=["/layout/connectors"],
+                    ))
         score = max(0.0, 1.0 - violations / max(1, checked))
         decision = (
             EvaluationDecision.REPAIR
@@ -151,6 +184,78 @@ class VisualQualityEvaluator:
             result.extend(VisualQualityEvaluator._flatten(child))
         return result
 
+    @classmethod
+    def _connector_crossings(
+        cls,
+        root: LaidOutNode,
+        object_states: dict[str, object],
+    ) -> list[tuple[str, str]]:
+        """Detect proper crossings between connector endpoint centerlines."""
+
+        boxes = {
+            node.object_id: node.box
+            for node in cls._flatten(root)
+        }
+        segments: list[
+            tuple[str, str, str, tuple[float, float], tuple[float, float]]
+        ] = []
+        for object_id, state in object_states.items():
+            if getattr(state, "kind", None) != "connector":
+                continue
+            content = getattr(state, "content", {})
+            source_id = content.get("source_id")
+            target_id = content.get("target_id")
+            if source_id not in boxes or target_id not in boxes:
+                continue
+            segments.append((
+                object_id,
+                source_id,
+                target_id,
+                cls._center(boxes[source_id]),
+                cls._center(boxes[target_id]),
+            ))
+        crossings: list[tuple[str, str]] = []
+        for index, first in enumerate(segments):
+            for second in segments[index + 1:]:
+                if {first[1], first[2]}.intersection({second[1], second[2]}):
+                    continue
+                if cls._segments_cross(first[3], first[4], second[3], second[4]):
+                    crossings.append((first[0], second[0]))
+        return crossings
+
+    @staticmethod
+    def _center(box: LayoutBox) -> tuple[float, float]:
+        return box.x + box.width / 2, box.y + box.height / 2
+
+    @staticmethod
+    def _segments_cross(
+        first_start: tuple[float, float],
+        first_end: tuple[float, float],
+        second_start: tuple[float, float],
+        second_end: tuple[float, float],
+    ) -> bool:
+        """Return whether two segments have a proper interior intersection."""
+
+        def orientation(
+            first: tuple[float, float],
+            second: tuple[float, float],
+            third: tuple[float, float],
+        ) -> float:
+            return (
+                (second[0] - first[0]) * (third[1] - first[1])
+                - (second[1] - first[1]) * (third[0] - first[0])
+            )
+
+        first_side = orientation(first_start, first_end, second_start)
+        second_side = orientation(first_start, first_end, second_end)
+        third_side = orientation(second_start, second_end, first_start)
+        fourth_side = orientation(second_start, second_end, first_end)
+        epsilon = 1e-6
+        return (
+            first_side * second_side < -epsilon
+            and third_side * fourth_side < -epsilon
+        )
+
     @staticmethod
     def _finding(
         code: str,
@@ -166,4 +271,7 @@ class VisualQualityEvaluator:
             artifact_id=artifact_id,
             message=message,
             repair_target="layout",
+            repair_scope="object",
+            object_ids=[artifact_id],
+            patch_paths=["/layout"],
         )

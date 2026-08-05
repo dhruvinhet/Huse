@@ -50,7 +50,6 @@ def _state_signature(document: VisualDocument, index: int) -> str:
     payload = [
         (
             object_id,
-            item.lifecycle.value,
             item.content,
             item.parent_id,
             item.child_ids,

@@ -138,21 +138,21 @@ Primary files: `app/quality/deterministic.py`, `app/quality/educational.py`,
 `app/quality/rendered.py`, `app/quality/composite.py`,
 `app/quality/storyboard_critic.py`, and quality models/tests.
 
-- [ ] Remove constant `diagram_correctness` and presence-only motion/alignment
+- [x] Remove constant `diagram_correctness` and presence-only motion/alignment
   scores.
-- [ ] Check that each beat's narration/visual obligation is supported by its
+- [x] Check that each beat's narration/visual obligation is supported by its
   visible objects, relations, state delta, and action—not just IDs or labels.
-- [ ] Validate relation direction, connector endpoints, recap coverage, and
+- [x] Validate relation direction, connector endpoints, recap coverage, and
   transformation preconditions/postconditions.
-- [ ] On sampled rendered frames, measure safe-area clipping, effective text
+- [x] On sampled rendered frames, measure safe-area clipping, effective text
   size, text/connector collisions, connector crossings, target visibility,
   focal occupancy, blankness, and density.
-- [ ] Sample transition frames as well as final frames so motion errors are
+- [x] Sample transition frames as well as final frames so motion errors are
   observable.
-- [ ] Define a risk policy for optional storyboard/multimodal review. Invoke it
+- [x] Define a risk policy for optional storyboard/multimodal review. Invoke it
   for low-confidence matching, unknown concepts, ambiguous relations, or
   deterministic borderline/failure cases—not indiscriminately for every run.
-- [ ] Every failing check must emit a stable finding code, object/beat IDs,
+- [x] Every failing check must emit a stable finding code, object/beat IDs,
   measured versus required values, repair scope, and suggested patch target.
 
 Acceptance criteria:

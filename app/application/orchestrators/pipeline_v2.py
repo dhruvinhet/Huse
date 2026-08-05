@@ -63,6 +63,7 @@ from app.quality import (
     DeterministicQualityEvaluator,
     EducationalQualityEvaluator,
     QualityPolicy,
+    QualityReviewPolicy,
     RenderedFrameQualityEvaluator,
     VisualQualityEvaluator,
 )
@@ -109,6 +110,8 @@ class V2PipelineRunner:
         pedagogy_router: PedagogyRouter | None = None,
         template_compiler: TemplateCompiler | None = None,
         asset_query_planner: SemanticAssetQueryPlanner | None = None,
+        storyboard_reviewer: QualityEvaluator | None = None,
+        review_policy: QualityReviewPolicy | None = None,
     ) -> None:
         """Configure replaceable ports and production defaults."""
 
@@ -164,6 +167,8 @@ class V2PipelineRunner:
                 GeminiVisionClient()
             )
         self._multimodal = multimodal_evaluator
+        self._storyboard_reviewer = storyboard_reviewer
+        self._review_policy = review_policy or QualityReviewPolicy()
         self._max_repairs = policy.maximum_repair_attempts
         self._manifest_builder = PhraseManifestBuilder()
         self._attention = attention_planner or AttentionPlanningEngine()
@@ -375,6 +380,44 @@ class V2PipelineRunner:
                         pedagogy,
                     )
                     continue
+                storyboard_review_reasons = self._review_policy.storyboard_reasons(
+                    storyboard_report,
+                    template_matches,
+                )
+                self._debug.write_json(
+                    f"v2/quality/storyboard_review_risk_{attempt}.json",
+                    {"reasons": storyboard_review_reasons},
+                )
+                if self._storyboard_reviewer is not None and storyboard_review_reasons:
+                    reviewer_report = self._stage(
+                        "Review High-Risk Storyboard",
+                        lambda: self._storyboard_reviewer.evaluate(
+                            "storyboard",
+                            storyboard,
+                            {
+                                "concept_graph": lesson.concept_graph,
+                                "lesson": lesson,
+                                "audience": request.audience,
+                                "pedagogy": pedagogy,
+                                "risk_reasons": storyboard_review_reasons,
+                            },
+                        ),
+                    )
+                    self._record(
+                        f"v2/quality/storyboard_reviewer_attempt_{attempt}.json",
+                        reviewer_report,
+                    )
+                    if reviewer_report.decision is not EvaluationDecision.PASS:
+                        storyboard = self._repair_or_raise(
+                            lesson,
+                            storyboard,
+                            reviewer_report,
+                            strategies,
+                            template_matches,
+                            attempt,
+                            pedagogy,
+                        )
+                        continue
                 self._record("v2/storyboard/accepted.json", storyboard)
 
                 narration_key = self._narration_cache_key(storyboard)
@@ -523,7 +566,16 @@ class V2PipelineRunner:
                 )
                 rendered_report = self._stage(
                     "Check Rendered Pixels",
-                    lambda: RenderedFrameQualityEvaluator().evaluate(frames),
+                    lambda: RenderedFrameQualityEvaluator().evaluate(
+                        frames,
+                        {
+                            "storyboard": storyboard,
+                            "document": document,
+                            "layout": layout,
+                            "camera": camera,
+                            "manifest": manifest,
+                        },
+                    ),
                 )
                 self._record(
                     f"v2/quality/rendered_attempt_{attempt}.json",
@@ -535,7 +587,17 @@ class V2PipelineRunner:
                         f"{[item.code for item in rendered_report.findings]}"
                     )
                 self.last_quality_report = rendered_report
-                if self._multimodal is not None:
+                multimodal_reasons = self._review_policy.rendered_reasons(
+                    report,
+                    rendered_report,
+                    assets,
+                    template_matches,
+                )
+                self._debug.write_json(
+                    f"v2/quality/multimodal_risk_{attempt}.json",
+                    {"reasons": multimodal_reasons},
+                )
+                if self._multimodal is not None and multimodal_reasons:
                     multimodal_report = self._stage(
                         "Evaluate Rendered Frames",
                         lambda: self._multimodal.evaluate_frames(
@@ -645,7 +707,17 @@ class V2PipelineRunner:
                 )
             )
         finding_codes = {item.code for item in report.findings}
-        if "semantic_coverage_low" in finding_codes:
+        deterministic_rebuild_codes = {
+            "semantic_coverage_low",
+            "required_relations_not_visualized",
+            "connector_endpoint_missing",
+            "connector_relation_reversed",
+            "connector_relation_ungrounded",
+            "semantic_state_delta_missing",
+            "visual_obligation_unrepresented",
+            "visual_obligation_action_missing",
+        }
+        if finding_codes.intersection(deterministic_rebuild_codes):
             return self._attention.enrich(
                 self._stage(
                     "Build Deterministic Storyboard Fallback",
