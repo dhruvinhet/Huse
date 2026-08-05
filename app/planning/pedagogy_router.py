@@ -223,6 +223,7 @@ class PedagogyRouter:
                 ),
             )
         rationale, definitions = self._GRAMMARS[mode]
+        definitions = self._bounded_definitions(lesson, definitions)
         confidence = (
             "Matched explicit lesson terms."
             if best_score
@@ -242,6 +243,28 @@ class PedagogyRouter:
                 for shot_id, purpose, visual, narration, camera in definitions
             ],
         )
+
+    @staticmethod
+    def _bounded_definitions(
+        lesson: LessonPlan,
+        definitions: tuple[_ShotDefinition, ...],
+    ) -> tuple[_ShotDefinition, ...]:
+        """Scale shot count to semantic complexity within reviewed bounds."""
+
+        node_count = len(lesson.concept_graph.nodes)
+        edge_count = len(lesson.concept_graph.edges)
+        if node_count <= 2 and edge_count == 0:
+            return (definitions[0], definitions[1], definitions[-1])
+        if node_count >= 7 or edge_count >= 8:
+            extension = (
+                "detail_extension",
+                "demonstrate",
+                "Inspect the remaining high-priority concepts in a bounded view.",
+                "Explain the remaining concepts and connect them to the lesson goal.",
+                "focus",
+            )
+            return (*definitions[:-1], extension, definitions[-1])
+        return definitions
 
     @staticmethod
     def _lesson_text(

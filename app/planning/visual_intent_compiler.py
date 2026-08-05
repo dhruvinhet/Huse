@@ -565,7 +565,7 @@ class VisualIntentCompiler:
     ) -> list[TraceAction]:
         """Compile transform obligations into a typed, state-changing trace."""
 
-        if purpose not in {"transform", "demonstrate"}:
+        if purpose not in {"transform", "demonstrate", "connect", "compare"}:
             return []
         path_ids = list(dict.fromkeys(object_ids))[:6]
         if len(path_ids) < 2:

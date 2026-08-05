@@ -75,7 +75,13 @@ from app.domain.storyboard import (
     VisualBeat,
     VisualObjectSpec,
 )
-from app.domain.strategy import CompiledTemplateProgram, TemplateMatch, VisualStrategy
+from app.domain.strategy import (
+    CompiledTemplateProgram,
+    ParameterProvenance,
+    TemplateCapabilities,
+    TemplateMatch,
+    VisualStrategy,
+)
 from app.domain.visual_document import (
     ObjectLifecycle,
     ObjectState,
@@ -141,6 +147,7 @@ __all__ = [
     "PedagogyMode",
     "PedagogyPlan",
     "PedagogyShot",
+    "ParameterProvenance",
     "PhraseTiming",
     "PipelineVersion",
     "QualityFinding",
@@ -157,6 +164,7 @@ __all__ = [
     "SplitAction",
     "Storyboard",
     "TemplateMatch",
+    "TemplateCapabilities",
     "SubstituteAction",
     "TraceAction",
     "TransferAction",

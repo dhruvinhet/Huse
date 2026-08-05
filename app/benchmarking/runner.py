@@ -287,6 +287,7 @@ class ProviderCaseExecutor:
         )
         artifacts = runner.last_artifacts
         storyboard = artifacts.get("v2/storyboard/accepted.json")
+        template_program = artifacts.get("v2/template_program.json")
         return BenchmarkCaseResult(
             case_id=case.case_id,
             status="completed",
@@ -304,6 +305,18 @@ class ProviderCaseExecutor:
             ),
             selected_templates=self._templates(artifacts),
             selected_operators=self._operators(storyboard),
+            template_match_confidence=getattr(
+                template_program, "match_confidence", None
+            ),
+            template_capability_evidence=list(getattr(
+                template_program, "capability_evidence", []
+            )),
+            template_parameter_provenance=dict(getattr(
+                template_program, "parameter_provenance", {}
+            )),
+            template_default_usage=list(getattr(
+                template_program, "default_usage", []
+            )),
             repair_attempts=sum(
                 path.startswith("v2/storyboard/attempt_") for path in artifacts
             ) - 1,
@@ -319,6 +332,9 @@ class ProviderCaseExecutor:
     @staticmethod
     def _templates(artifacts: dict[str, object]) -> list[str]:
         program = artifacts.get("v2/template_program.json")
+        template_ids = getattr(program, "template_ids", None)
+        if isinstance(template_ids, list):
+            return [item for item in template_ids if isinstance(item, str)]
         template_id = getattr(program, "template_id", None)
         return [template_id] if isinstance(template_id, str) else []
 

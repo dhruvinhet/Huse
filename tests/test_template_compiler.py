@@ -10,7 +10,7 @@ from app.domain.lesson import (
 )
 from app.domain.operations import OperationType
 from app.domain.storyboard import VisualObjectSpec
-from app.domain.strategy import TemplateMatch
+from app.domain.strategy import TemplateCapabilities, TemplateMatch
 from app.domain.visual_document import ObjectLifecycle
 from app.planning import PedagogyRouter, TemplateCompiler
 from app.templates import TemplateRegistry
@@ -212,6 +212,37 @@ def test_builtin_match_compiles_complete_visual_program() -> None:
     assert [beat.teaching_intent for beat in program.storyboard.beats] == [
         shot.visual_obligation for shot in route.shots
     ]
+    assert program.match_confidence > 0
+    assert program.capability_evidence
+    assert program.parameter_provenance["concepts"].source == "extracted"
+    assert isinstance(program.default_usage, list)
+
+
+def test_required_template_parameter_cannot_use_generic_default() -> None:
+    """A reviewed required operand fails clearly when extraction has no value."""
+
+    lesson = _binary_search_lesson()
+    route = PedagogyRouter().route(
+        lesson,
+        AudienceProfile(learning_goal="Run the algorithm"),
+    )
+    match = TemplateMatch(
+        template_id="trusted.v1",
+        concept_ids=["sorted_array"],
+        score=1,
+        reason="Requires a factual measurement",
+        capabilities=TemplateCapabilities(required_parameters=["values"]),
+    )
+
+    import pytest
+    with pytest.raises(ValueError, match="requires extracted parameter 'values'"):
+        TemplateCompiler().compile(
+            lesson,
+            [],
+            [match],
+            PoisonedPrototypeLibrary(),
+            route,
+        )
 
 
 def test_templates_can_be_owned_by_individual_shots() -> None:

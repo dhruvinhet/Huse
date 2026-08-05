@@ -23,6 +23,7 @@ from app.domain.storyboard import (
 )
 from app.domain.strategy import (
     CompiledTemplateProgram,
+    ParameterProvenance,
     TemplateMatch,
     VisualStrategy,
 )
@@ -72,9 +73,14 @@ class TemplateCompiler:
         "equation_derivation.v1",
         "code_trace.v1",
     }
-    _SAFE_PARAMETER_KEYS = {
-        "values", "stages", "nodes", "rows", "columns", "labels",
-        "components",
+    _TEMPLATE_PARAMETER_FIELDS = {
+        "array.v1": {"values"},
+        "pipeline.v1": {"stages"},
+        "tree.v1": {"nodes"},
+        "graph.v1": {"nodes"},
+        "matrix.v1": {"rows", "columns", "values"},
+        "probability_distribution.v1": {"values", "labels"},
+        "transformer_block.v1": {"components"},
     }
 
     def compile(
@@ -102,10 +108,16 @@ class TemplateCompiler:
                 pedagogy,
                 target_duration,
             )
-        selection = self._select(lesson, strategies, matches)
+        selection = (
+            max(section_selections, key=lambda item: item.score)
+            if section_selections
+            else self._select(lesson, strategies, matches)
+        )
         if selection is None:
             return None
-        parameters = self._validated_parameters(selection, lesson)
+        parameters = self._validated_parameters(selection, lesson, library)
+        parameter_provenance = dict(self._latest_parameter_provenance)
+        default_usage = list(self._latest_default_usage)
         raw_concept_count = len(parameters.get("concepts", []))
         raw_relation_count = len(parameters.get("relations", []))
         parameters = bound_semantic_operands(
@@ -141,6 +153,10 @@ class TemplateCompiler:
                 shot.shot_id: selection.template_id for shot in pedagogy.shots
             },
             parameters=parameters,
+            parameter_provenance=parameter_provenance,
+            default_usage=default_usage,
+            match_confidence=selection.match_confidence,
+            capability_evidence=selection.capability_evidence,
             pedagogy_mode=pedagogy.mode,
             storyboard=storyboard,
         )
@@ -163,8 +179,21 @@ class TemplateCompiler:
         }
         groups = self._shot_concept_groups(lesson, pedagogy)
         selections: list[TemplateMatch] = []
-        for concepts in groups:
+        for shot, concepts in zip(pedagogy.shots, groups, strict=True):
             required = set(concepts)
+            eligible = [
+                match
+                for match in matches
+                if shot.purpose in match.capabilities.pedagogy_roles
+                and min(len(required), MAX_SEMANTIC_CONCEPTS)
+                <= match.capabilities.maximum_operands
+            ]
+            if not eligible:
+                raise ValueError(
+                    f"no reviewed template capability can satisfy shot "
+                    f"{shot.shot_id!r} role={shot.purpose!r} "
+                    f"operands={len(required)}"
+                )
 
             def rank(match: TemplateMatch) -> tuple[float, float, str]:
                 overlap = len(required.intersection(match.concept_ids)) / max(
@@ -173,7 +202,7 @@ class TemplateCompiler:
                 preference = 0.08 if match.template_id in preferred else 0.0
                 return match.score + 0.30 * overlap + preference, overlap, match.template_id
 
-            selections.append(max(matches, key=rank))
+            selections.append(max(eligible, key=rank))
         return selections
 
     def _compile_sections(
@@ -189,10 +218,18 @@ class TemplateCompiler:
         groups = self._shot_concept_groups(lesson, pedagogy)
         roots: list[VisualObjectSpec] = []
         section_parameters: list[dict[str, object]] = []
+        combined_provenance: dict[str, ParameterProvenance] = {}
+        combined_defaults: list[str] = []
         for index, (selection, concepts) in enumerate(
             zip(selections, groups, strict=True)
         ):
-            parameters = self._validated_parameters(selection, lesson)
+            parameters = self._validated_parameters(selection, lesson, library)
+            for key, provenance in self._latest_parameter_provenance.items():
+                combined_provenance[f"{pedagogy.shots[index].shot_id}.{key}"] = provenance
+            combined_defaults.extend(
+                f"{pedagogy.shots[index].shot_id}.{key}"
+                for key in self._latest_default_usage
+            )
             parameters["object_id"] = (
                 f"template_{index:02d}_{self._safe_id(selection.template_id)}"
             )
@@ -290,6 +327,15 @@ class TemplateCompiler:
                 for shot, selection in zip(pedagogy.shots, selections, strict=True)
             },
             parameters={"sections": section_parameters},
+            parameter_provenance=combined_provenance,
+            default_usage=combined_defaults,
+            match_confidence=sum(item.match_confidence for item in selections)
+            / len(selections),
+            capability_evidence=list(dict.fromkeys(
+                evidence
+                for selection in selections
+                for evidence in selection.capability_evidence
+            )),
             pedagogy_mode=pedagogy.mode,
             storyboard=storyboard,
         )
@@ -337,9 +383,14 @@ class TemplateCompiler:
         self,
         match: TemplateMatch,
         lesson: LessonPlan,
+        library: TemplateLibrary,
     ) -> dict[str, object]:
-        """Allow only bounded template parameters and authoritative identifiers."""
+        """Extract only reviewed fields and record every value's provenance."""
 
+        self._latest_parameter_provenance = {
+            key: value for key, value in match.parameter_provenance.items()
+        }
+        self._latest_default_usage: list[str] = []
         parameters: dict[str, object] = {
             "object_id": f"template_{self._safe_id(match.template_id)}",
             "label": lesson.title,
@@ -364,7 +415,45 @@ class TemplateCompiler:
                 for edge in lesson.concept_graph.edges
             ],
         }
-        for key in self._SAFE_PARAMETER_KEYS:
+        self._latest_parameter_provenance.update({
+            "object_id": ParameterProvenance(
+                source="derived", source_field="template_id", confidence=1.0
+            ),
+            "label": ParameterProvenance(
+                source="extracted", source_field="lesson.title", confidence=1.0
+            ),
+            "concepts": ParameterProvenance(
+                source="extracted",
+                source_field="lesson.concept_graph.nodes",
+                confidence=1.0,
+            ),
+            "relations": ParameterProvenance(
+                source="extracted",
+                source_field="lesson.concept_graph.edges",
+                confidence=1.0,
+            ),
+        })
+        allowed = set(self._TEMPLATE_PARAMETER_FIELDS.get(match.template_id, set()))
+        if match.template_id in self._COMPONENT_PARAMETER_TEMPLATES:
+            allowed.add("components")
+        schema: dict[str, object] = {}
+        schema_provider = getattr(library, "parameter_schema", None)
+        if callable(schema_provider):
+            try:
+                schema = schema_provider(match.template_id)
+            except (KeyError, TypeError):
+                schema = {}
+        properties = schema.get("properties", {})
+        if isinstance(properties, dict):
+            allowed.update(properties)
+            self._latest_default_usage.extend(
+                key
+                for key, definition in properties.items()
+                if key not in match.parameters
+                and isinstance(definition, dict)
+                and "default" in definition
+            )
+        for key in allowed:
             value = match.parameters.get(key)
             if key in {"rows", "columns"} and isinstance(value, int):
                 parameters[key] = max(1, min(10, value))
@@ -376,6 +465,14 @@ class TemplateCompiler:
                 ]
                 if cleaned:
                     parameters[key] = cleaned
+            elif isinstance(value, str) and value.strip():
+                parameters[key] = value.strip()[:160]
+            if key in parameters and key not in self._latest_parameter_provenance:
+                self._latest_parameter_provenance[key] = ParameterProvenance(
+                    source="extracted",
+                    source_field=f"template_match.parameters.{key}",
+                    confidence=match.match_confidence,
+                )
 
         labels = [node.label for node in lesson.concept_graph.nodes]
         if match.template_id == "pipeline.v1":
@@ -417,6 +514,27 @@ class TemplateCompiler:
             numbers = self._lesson_numbers(lesson)
             if len(numbers) >= 3:
                 parameters["values"] = numbers[:10]
+                self._latest_parameter_provenance["values"] = ParameterProvenance(
+                    source="extracted",
+                    source_field="lesson.numeric_literals",
+                    confidence=1.0,
+                )
+        for key in match.capabilities.required_parameters:
+            value = parameters.get(key)
+            if value is None or value == [] or value == "":
+                raise ValueError(
+                    f"template {match.template_id!r} requires extracted "
+                    f"parameter {key!r}; no generic default is permitted"
+                )
+        for key in parameters:
+            self._latest_parameter_provenance.setdefault(
+                key,
+                ParameterProvenance(
+                    source="derived",
+                    source_field=f"compiler.{match.template_id}.{key}",
+                    confidence=0.95,
+                ),
+            )
         return parameters
 
     def _ground_object(
@@ -618,7 +736,7 @@ class TemplateCompiler:
     ) -> list[TraceAction]:
         """Give transformation sections a supported typed state transition."""
 
-        if purpose not in {"transform", "demonstrate"}:
+        if purpose not in {"transform", "demonstrate", "connect", "compare"}:
             return []
         raw_operator = str(root.content.get("operator", "semantic_structure"))
         try:

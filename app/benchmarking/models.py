@@ -8,6 +8,7 @@ from pydantic import Field, model_validator
 
 from app.domain.generation import AudienceLevel
 from app.domain.lesson import ConceptRelation
+from app.domain.strategy import ParameterProvenance
 from app.models.base import BaseModel, NonEmptyString
 
 
@@ -104,6 +105,12 @@ class BenchmarkCaseResult(BaseModel):
     metrics: BenchmarkMetrics = Field(default_factory=BenchmarkMetrics)
     selected_templates: list[NonEmptyString] = Field(default_factory=list)
     selected_operators: list[NonEmptyString] = Field(default_factory=list)
+    template_match_confidence: float | None = Field(default=None, ge=0, le=1)
+    template_capability_evidence: list[NonEmptyString] = Field(default_factory=list)
+    template_parameter_provenance: dict[
+        NonEmptyString, ParameterProvenance
+    ] = Field(default_factory=dict)
+    template_default_usage: list[NonEmptyString] = Field(default_factory=list)
     repair_attempts: int = Field(default=0, ge=0)
     quality_findings: list[NonEmptyString] = Field(default_factory=list)
     artifact_paths: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)

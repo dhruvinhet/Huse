@@ -117,7 +117,11 @@ def collect_metrics(
         ]
         if transformation_beats:
             action_coverage = sum(
-                any(operation.operation not in _PRESENTATION_ONLY for operation in beat.operations)
+                bool(beat.semantic_actions)
+                or any(
+                    operation.operation not in _PRESENTATION_ONLY
+                    for operation in beat.operations
+                )
                 for beat in transformation_beats
             ) / len(transformation_beats)
             if document is not None:

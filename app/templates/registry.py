@@ -9,7 +9,11 @@ from typing import Protocol
 from app.domain.generation import AudienceLevel, AudienceProfile
 from app.domain.lesson import ConceptGraph, ConceptRelation
 from app.domain.storyboard import VisualObjectSpec
-from app.domain.strategy import TemplateMatch
+from app.domain.strategy import (
+    ParameterProvenance,
+    TemplateCapabilities,
+    TemplateMatch,
+)
 from app.planning.graph_semantics import analyze_graph
 
 
@@ -18,6 +22,7 @@ class SemanticTemplate(Protocol):
 
     template_id: str
     keywords: frozenset[str]
+    capabilities: TemplateCapabilities
 
     def instantiate(self, parameters: dict[str, object]) -> VisualObjectSpec:
         """Build a semantic object hierarchy without coordinates."""
@@ -32,6 +37,7 @@ class _TemplateProfile:
     relations: frozenset[ConceptRelation]
     minimum_operands: int
     diagram_kind: str
+    capabilities: TemplateCapabilities
 
 
 class TemplateRegistry:
@@ -131,6 +137,31 @@ class TemplateRegistry:
             "comparison", "tree", "graph", "table",
         },
     }
+    _ACTIONS_BY_RELATION = {
+        ConceptRelation.CONTRASTS_WITH: frozenset({"compare", "substitute"}),
+        ConceptRelation.CAUSES: frozenset({"produce", "transform", "trace"}),
+        ConceptRelation.TRANSFORMS_TO: frozenset({"transform", "transfer"}),
+        ConceptRelation.FLOWS_TO: frozenset({"route", "transfer", "trace"}),
+        ConceptRelation.DEPENDS_ON: frozenset({"route", "trace"}),
+        ConceptRelation.PART_OF: frozenset({"group", "merge", "trace"}),
+        ConceptRelation.EXAMPLE_OF: frozenset({"group", "compare"}),
+    }
+    _KIND_ACTIONS = {
+        "process": {"transfer", "route", "split", "merge", "transform", "trace"},
+        "flow": {"transfer", "route", "split", "merge", "trace"},
+        "comparison": {"compare", "substitute", "transform", "trace"},
+        "tree": {"group", "split", "merge", "trace"},
+        "graph": {"route", "group", "compare", "trace"},
+        "array": {"split", "merge", "compare", "substitute", "trace"},
+        "matrix": {"compare", "accumulate", "trace", "transform"},
+    }
+    _REQUIRED_PARAMETERS = {
+        "array.v1": ["values"],
+        "pipeline.v1": ["stages"],
+        "tree.v1": ["nodes"],
+        "graph.v1": ["nodes"],
+        "matrix.v1": ["rows", "columns"],
+    }
 
     def __init__(self, templates: list[SemanticTemplate] | None = None) -> None:
         """Register templates and precompute their local search profiles."""
@@ -173,6 +204,8 @@ class TemplateRegistry:
                 relation_set,
             ):
                 continue
+            if not self._capability_eligible(profile.capabilities, graph):
+                continue
             relation_score = self._relation_score(profile, relation_set)
             lexical_score = (
                 bm25[template_id] / maximum_bm25
@@ -181,7 +214,11 @@ class TemplateRegistry:
             )
             if template_id == "concept_set.v1" and structure.peer_collection:
                 lexical_score = max(0.80, lexical_score)
-            explicit_relation = relation_score >= 1.0
+            explicit_relation = (
+                relation_score >= 1.0
+                or bool(relation_set)
+                and relation_set.issubset(set(profile.capabilities.relation_types))
+            )
             if lexical_score <= 0 and not explicit_relation:
                 continue
             operand_score = min(
@@ -202,7 +239,33 @@ class TemplateRegistry:
                 explicit_relation,
             )
             parameters = self._parameters(graph, profile)
+            missing_parameters = [
+                name
+                for name in profile.capabilities.required_parameters
+                if name not in parameters
+            ]
+            if missing_parameters:
+                continue
             relation_names = sorted(item.value for item in relation_set)
+            parameter_provenance = {
+                key: ParameterProvenance(
+                    source=("derived" if key == "object_id" else "extracted"),
+                    source_field=(
+                        "template_id" if key == "object_id"
+                        else "concept_graph.objectives" if key == "label"
+                        else "concept_graph.nodes"
+                    ),
+                    confidence=1.0,
+                )
+                for key in parameters
+            }
+            evidence = [
+                f"operands={len(graph.nodes)} within "
+                f"{profile.capabilities.minimum_operands}-"
+                f"{profile.capabilities.maximum_operands}",
+                "relations=" + ",".join(relation_names or ["none"]),
+                "actions=" + ",".join(profile.capabilities.semantic_actions),
+            ]
             matches.append(
                 TemplateMatch(
                     template_id=template_id,
@@ -210,6 +273,10 @@ class TemplateRegistry:
                     parameters=parameters,
                     prototype=None,
                     score=score,
+                    capabilities=profile.capabilities,
+                    capability_evidence=evidence,
+                    match_confidence=score,
+                    parameter_provenance=parameter_provenance,
                     reason=(
                         f"relation={relation_score:.2f}; "
                         f"bm25={bm25[template_id]:.3f}; "
@@ -252,6 +319,31 @@ class TemplateRegistry:
             return structure.is_process and structure.causal_edges >= 3
         if template_id == "concept_set.v1":
             return structure.peer_collection and not structure.is_process
+        return True
+
+    @classmethod
+    def _capability_eligible(
+        cls,
+        capabilities: TemplateCapabilities,
+        graph: ConceptGraph,
+    ) -> bool:
+        """Apply hard semantic obligations before any lexical ranking."""
+
+        operand_count = len(graph.nodes)
+        if not (
+            capabilities.minimum_operands
+            <= operand_count
+            <= capabilities.maximum_operands
+        ):
+            return False
+        supported_relations = set(capabilities.relation_types)
+        supported_actions = set(capabilities.semantic_actions)
+        for relation in {edge.relation for edge in graph.edges}:
+            if supported_relations and relation not in supported_relations:
+                return False
+            required_actions = cls._ACTIONS_BY_RELATION.get(relation, frozenset())
+            if required_actions and not required_actions.intersection(supported_actions):
+                return False
         return True
 
     def instantiate(
@@ -316,12 +408,42 @@ class TemplateRegistry:
             for term in {"cycle", "timeline", "venn", "graph", "tree"}
         ):
             minimum_operands = 3
+        declared = getattr(template, "capabilities", None)
+        if isinstance(declared, TemplateCapabilities):
+            capabilities = declared
+        else:
+            actions = set(self._KIND_ACTIONS.get(diagram_kind, set()))
+            for relation in relations:
+                actions.update(self._ACTIONS_BY_RELATION.get(relation, ()))
+            actions.add("trace")
+            roles = [
+                "introduce", "demonstrate", "transform", "connect",
+                "emphasize", "summarize",
+            ]
+            if "compare" in actions:
+                roles.append("compare")
+            capabilities = TemplateCapabilities(
+                relation_types=sorted(relations, key=lambda item: item.value),
+                semantic_actions=sorted(actions),
+                minimum_operands=minimum_operands,
+                maximum_operands=12,
+                pedagogy_roles=list(dict.fromkeys(roles)),
+                layout_constraints=[
+                    f"diagram_kind={diagram_kind}",
+                    "semantic_ids_unique",
+                    "connectors_reference_local_objects",
+                ],
+                required_parameters=self._REQUIRED_PARAMETERS.get(
+                    template.template_id, []
+                ),
+            )
         return _TemplateProfile(
             template_id=template.template_id,
             tokens=tokens,
             relations=relations,
             minimum_operands=minimum_operands,
             diagram_kind=diagram_kind,
+            capabilities=capabilities,
         )
 
     def _bm25_scores(self, query_tokens: list[str]) -> dict[str, float]:
@@ -368,11 +490,15 @@ class TemplateRegistry:
 
         if not relations:
             return 0.35
-        overlap = profile.relations.intersection(relations)
+        declared_relations = (
+            profile.relations
+            or frozenset(profile.capabilities.relation_types)
+        )
+        overlap = declared_relations.intersection(relations)
         if overlap:
             graph_recall = len(overlap) / len(relations)
             return 0.55 + 0.45 * graph_recall
-        if not profile.relations:
+        if not declared_relations:
             return 0.20
         return 0.0
 
@@ -442,13 +568,26 @@ class TemplateRegistry:
             "_",
             profile.template_id.casefold(),
         ).strip("_")
-        return {
+        parameters: dict[str, object] = {
             "object_id": f"matched_{object_id}",
             "label": graph.objectives[0],
             "components": labels[:10],
             "stages": labels[:10],
             "nodes": labels[:10],
         }
+        numbers = list(dict.fromkeys(re.findall(
+            r"(?<![A-Za-z])\d+(?:\.\d+)?",
+            " ".join([*labels, *[node.definition for node in graph.nodes]]),
+        )))
+        if numbers:
+            parameters["values"] = numbers[:10]
+        if profile.template_id == "matrix.v1":
+            side = max(1, min(10, round(len(graph.nodes) ** 0.5)))
+            parameters["rows"] = side
+            parameters["columns"] = max(
+                1, min(10, (len(graph.nodes) + side - 1) // side)
+            )
+        return parameters
 
     def _query_tokens(
         self,

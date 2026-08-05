@@ -671,7 +671,7 @@ class DeterministicQualityEvaluator:
         transformation_beats = [
             beat
             for beat in storyboard.beats
-            if beat.purpose in {"transform", "demonstrate"}
+            if beat.purpose in {"transform", "demonstrate", "connect", "compare"}
         ]
         if not transformation_beats:
             return 1.0

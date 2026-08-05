@@ -7,8 +7,32 @@ from app.domain.lesson import (
     ConceptNode,
     ConceptRelation,
 )
+from app.domain.storyboard import VisualObjectSpec
+from app.domain.strategy import TemplateCapabilities
 from app.templates import TemplateRegistry
 from app.templates.builtins import builtin_templates
+
+
+class CapabilityTemplate:
+    """Small reviewed template fixture with explicit machine capabilities."""
+
+    def __init__(
+        self,
+        template_id: str,
+        keywords: set[str],
+        capabilities: TemplateCapabilities,
+    ) -> None:
+        self.template_id = template_id
+        self.keywords = frozenset(keywords)
+        self.capabilities = capabilities
+
+    def instantiate(self, parameters: dict[str, object]) -> VisualObjectSpec:
+        return VisualObjectSpec(
+            object_id=str(parameters["object_id"]),
+            kind="component",
+            semantic_role="fixture",
+            accessibility_label="Capability fixture",
+        )
 
 
 def _graph(
@@ -104,3 +128,41 @@ def test_relation_stage_selects_cause_effect_for_causal_operands() -> None:
 
     assert matches[0].template_id == "cause_effect.v1"
     assert "operands=2/2" in matches[0].reason
+
+
+def test_high_bm25_cannot_override_incompatible_capabilities() -> None:
+    """Lexical similarity never authorizes a template that cannot route flow."""
+
+    incompatible = CapabilityTemplate(
+        "request_pipeline_words.v1",
+        {"request", "response", "pipeline", "flow", "server"},
+        TemplateCapabilities(
+            relation_types=[ConceptRelation.CONTRASTS_WITH],
+            semantic_actions=["compare"],
+            minimum_operands=2,
+            maximum_operands=4,
+        ),
+    )
+    compatible = CapabilityTemplate(
+        "route_capable.v1",
+        {"route"},
+        TemplateCapabilities(
+            relation_types=[ConceptRelation.FLOWS_TO],
+            semantic_actions=["route"],
+            minimum_operands=2,
+            maximum_operands=4,
+        ),
+    )
+    registry = TemplateRegistry([incompatible, compatible])
+    graph = _graph(
+        "A request flows through a server pipeline to a response",
+        ["Request", "Response"],
+        ConceptRelation.FLOWS_TO,
+    )
+
+    matches = registry.match(graph)
+
+    assert [item.template_id for item in matches] == ["route_capable.v1"]
+    assert matches[0].capability_evidence
+    assert matches[0].match_confidence == matches[0].score
+    assert matches[0].parameter_provenance["components"].source == "extracted"

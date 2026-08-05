@@ -6,6 +6,7 @@ from pydantic import Field
 
 from app.models.base import BaseModel, NonEmptyString
 from app.domain.pedagogy import PedagogyMode
+from app.domain.lesson import ConceptRelation
 from app.domain.storyboard import Storyboard, VisualObjectSpec
 
 
@@ -24,6 +25,35 @@ class VisualStrategy(BaseModel):
     evidence_score: float = Field(default=0.5, ge=0, le=1)
 
 
+class TemplateCapabilities(BaseModel):
+    """Machine-readable obligations a reviewed template can satisfy."""
+
+    relation_types: list[ConceptRelation] = Field(
+        default_factory=lambda: list(ConceptRelation)
+    )
+    semantic_actions: list[NonEmptyString] = Field(default_factory=lambda: [
+        "transfer", "route", "split", "merge", "group", "compare",
+        "consume", "produce", "transform", "substitute", "accumulate",
+        "trace",
+    ])
+    minimum_operands: int = Field(default=1, ge=1, le=64)
+    maximum_operands: int = Field(default=12, ge=1, le=64)
+    pedagogy_roles: list[NonEmptyString] = Field(default_factory=lambda: [
+        "introduce", "demonstrate", "compare", "transform", "connect",
+        "emphasize", "summarize",
+    ])
+    layout_constraints: list[NonEmptyString] = Field(default_factory=list)
+    required_parameters: list[NonEmptyString] = Field(default_factory=list)
+
+
+class ParameterProvenance(BaseModel):
+    """Explain where a template parameter originated."""
+
+    source: Literal["extracted", "derived", "default"]
+    source_field: NonEmptyString
+    confidence: float = Field(default=1.0, ge=0, le=1)
+
+
 class TemplateMatch(BaseModel):
     """Represent a ranked semantic-template match."""
 
@@ -33,6 +63,13 @@ class TemplateMatch(BaseModel):
     prototype: VisualObjectSpec | None = None
     score: float = Field(ge=0, le=1)
     reason: NonEmptyString
+    capabilities: TemplateCapabilities = Field(default_factory=TemplateCapabilities)
+    capability_evidence: list[NonEmptyString] = Field(default_factory=list)
+    match_confidence: float = Field(default=0.5, ge=0, le=1)
+    parameter_provenance: dict[NonEmptyString, ParameterProvenance] = Field(
+        default_factory=dict
+    )
+    default_usage: list[NonEmptyString] = Field(default_factory=list)
 
 
 class CompiledTemplateProgram(BaseModel):
@@ -44,5 +81,11 @@ class CompiledTemplateProgram(BaseModel):
         default_factory=dict
     )
     parameters: dict[str, object] = Field(default_factory=dict)
+    parameter_provenance: dict[NonEmptyString, ParameterProvenance] = Field(
+        default_factory=dict
+    )
+    default_usage: list[NonEmptyString] = Field(default_factory=list)
+    match_confidence: float = Field(default=0.5, ge=0, le=1)
+    capability_evidence: list[NonEmptyString] = Field(default_factory=list)
     pedagogy_mode: PedagogyMode
     storyboard: Storyboard

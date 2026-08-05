@@ -264,15 +264,15 @@ Acceptance criteria:
 Primary files: `app/templates/registry.py`,
 `app/planning/template_compiler.py`, template metadata, and pedagogy routing.
 
-- [ ] Add machine-readable template capabilities: supported relation types,
+- [x] Add machine-readable template capabilities: supported relation types,
   actions, operand cardinality, pedagogy roles, and layout constraints.
-- [ ] Make capability/obligation compatibility a hard eligibility check before
+- [x] Make capability/obligation compatibility a hard eligibility check before
   lexical ranking.
-- [ ] Replace the small global safe-key copy with reviewed per-template
+- [x] Replace the small global safe-key copy with reviewed per-template
   parameter schemas/extractors.
-- [ ] Record extraction provenance and distinguish extracted values from
+- [x] Record extraction provenance and distinguish extracted values from
   defaults.
-- [ ] Permit shot counts to follow the lesson/pedagogy requirements rather than
+- [x] Permit shot counts to follow the lesson/pedagogy requirements rather than
   always forcing four shots, while keeping explicit upper/lower bounds.
 
 Acceptance criteria:

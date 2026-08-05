@@ -59,8 +59,8 @@ def test_router_selects_all_supported_modes(
     )
 
     assert plan.mode is expected
-    assert len(plan.shots) == 4
-    assert len({shot.shot_id for shot in plan.shots}) == 4
+    assert 3 <= len(plan.shots) <= 6
+    assert len({shot.shot_id for shot in plan.shots}) == len(plan.shots)
     assert all(shot.visual_obligation for shot in plan.shots)
     assert all(shot.narration_obligation for shot in plan.shots)
 
@@ -118,3 +118,39 @@ def test_modes_have_distinct_shot_grammars() -> None:
     }
 
     assert len(grammars) == len(PedagogyMode)
+
+
+def test_shot_count_scales_with_lesson_complexity_within_bounds() -> None:
+    """Small lessons use three shots while broad lessons receive a fifth view."""
+
+    small = PedagogyRouter().route(
+        _lesson("What is inertia"),
+        AudienceProfile(learning_goal="Understand inertia"),
+    )
+    nodes = [
+        ConceptNode(
+            concept_id=f"part_{index}",
+            label=f"Part {index}",
+            definition=f"Important part {index}.",
+            importance=1,
+            teaching_order=index,
+        )
+        for index in range(7)
+    ]
+    broad_lesson = LessonPlan(
+        title="Seven coordinated principles",
+        summary="A broad set of coordinated principles.",
+        concept_graph=ConceptGraph(
+            objectives=["Understand all seven principles"],
+            nodes=nodes,
+            teaching_sequence=[node.concept_id for node in nodes],
+        ),
+    )
+    broad = PedagogyRouter().route(
+        broad_lesson,
+        AudienceProfile(learning_goal="Understand the complete set"),
+    )
+
+    assert len(small.shots) == 3
+    assert len(broad.shots) == 5
+    assert broad.shots[-2].shot_id == "detail_extension"
