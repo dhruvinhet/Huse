@@ -240,15 +240,15 @@ Acceptance criteria:
 Primary files: `app/domain/operations.py`, operator template definitions,
 `app/state/engine.py`, `app/motion/planner.py`, and renderer plugins.
 
-- [ ] Add a closed, typed semantic-action union above `VisualOperation`, for
+- [x] Add a closed, typed semantic-action union above `VisualOperation`, for
   example transfer, route, split, merge, group, compare, consume, produce,
   transform, substitute, accumulate, and trace.
-- [ ] Define action schemas with operands, relation/direction, preconditions,
+- [x] Define action schemas with operands, relation/direction, preconditions,
   postconditions, duration/easing hints, and reversibility.
-- [ ] Give each compatible operator an explicit state model and action compiler
+- [x] Give each compatible operator an explicit state model and action compiler
   that lowers semantic actions to existing low-level operations.
-- [ ] Reject unsupported operator/action combinations before rendering.
-- [ ] Derive trajectories, masks, connector changes, and pixel behavior from
+- [x] Reject unsupported operator/action combinations before rendering.
+- [x] Derive trajectories, masks, connector changes, and pixel behavior from
   the action/state delta rather than a strategy name alone.
 
 Acceptance criteria:

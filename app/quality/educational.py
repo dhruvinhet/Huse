@@ -407,7 +407,7 @@ class EducationalQualityEvaluator:
             if beat.purpose != "transform":
                 continue
             checks += 1
-            if any(
+            if beat.semantic_actions or any(
                 operation.operation in semantic_operations
                 for operation in beat.operations
             ):

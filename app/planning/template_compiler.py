@@ -6,7 +6,7 @@ from loguru import logger
 
 from app.application.ports.knowledge import TemplateLibrary
 from app.domain.lesson import LessonPlan
-from app.domain.operations import OperationType, VisualOperation
+from app.domain.operations import OperationType, TraceAction, VisualOperation
 from app.domain.pedagogy import PedagogyPlan
 from app.domain.semantic_bounds import (
     MAX_SEMANTIC_CONCEPTS,
@@ -26,6 +26,7 @@ from app.domain.strategy import (
     TemplateMatch,
     VisualStrategy,
 )
+from app.domain.visual_intent import RendererOperator
 
 
 class TemplateCompiler:
@@ -254,6 +255,9 @@ class TemplateCompiler:
                 purpose=shot.purpose,
                 estimated_duration=max(2.0, target_duration / len(pedagogy.shots)),
                 operations=operations,
+                semantic_actions=self._template_actions(
+                    root, shot.purpose, shot.shot_id
+                ),
                 attention=[AttentionCue(
                     cue="focus",
                     target_ids=list(dict.fromkeys(targets)),
@@ -578,6 +582,9 @@ class TemplateCompiler:
                         target_duration / max(1, len(shots)),
                     ),
                     operations=operations,
+                    semantic_actions=self._template_actions(
+                        root, shot.purpose, shot.shot_id
+                    ),
                     attention=[
                         AttentionCue(
                             cue="focus",
@@ -602,6 +609,35 @@ class TemplateCompiler:
                 if node.importance >= 0.5
             ],
         )
+
+    @staticmethod
+    def _template_actions(
+        root: VisualObjectSpec,
+        purpose: str,
+        shot_id: str,
+    ) -> list[TraceAction]:
+        """Give transformation sections a supported typed state transition."""
+
+        if purpose not in {"transform", "demonstrate"}:
+            return []
+        raw_operator = str(root.content.get("operator", "semantic_structure"))
+        try:
+            operator = RendererOperator(raw_operator)
+        except ValueError:
+            operator = RendererOperator.SEMANTIC_STRUCTURE
+        path_ids = [
+            item.object_id for item in root.flatten() if item.kind != "connector"
+        ][:6]
+        if len(path_ids) < 2:
+            return []
+        return [TraceAction(
+            action_id=f"{root.object_id}_{shot_id}_trace",
+            action="trace",
+            operator=operator,
+            operand_ids=path_ids,
+            path_ids=path_ids,
+            duration_hint=1.2,
+        )]
 
     @staticmethod
     def _shot_concept_groups(

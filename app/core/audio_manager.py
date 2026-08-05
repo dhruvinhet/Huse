@@ -514,8 +514,9 @@ class AudioManager:
     def _remove_file(path: Path) -> None:
         """Remove one known temporary audio file if it exists."""
 
-        if path.is_file():
-            path.unlink()
+        # Multiple failed scene workers can reach shared cleanup together.
+        # ``missing_ok`` makes the known-file removal atomic under that race.
+        path.unlink(missing_ok=True)
 
     @staticmethod
     def _working_path(configured_path: Path) -> Path:

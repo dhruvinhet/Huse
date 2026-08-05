@@ -3,7 +3,7 @@
 from collections import defaultdict
 import re
 
-from app.domain.layout import LaidOutNode, LayoutPlan
+from app.domain.layout import LaidOutNode, LayoutBox, LayoutPlan
 from app.domain.motion import MotionEvent, MotionPlan
 from app.domain.narration import AlignedAudio
 from app.domain.repair import RepairPlan
@@ -128,6 +128,21 @@ class SemanticAnimationPlanner:
         OperationType.UNGROUP: "group_expand",
     }
 
+    _ACTION_STRATEGIES = {
+        "transfer": "semantic_transfer",
+        "route": "route_trace",
+        "split": "split_reveal",
+        "merge": "funnel_collapse",
+        "group": "group_focus",
+        "compare": "split_reveal",
+        "consume": "fade_out",
+        "produce": "fade_in",
+        "transform": "morph",
+        "substitute": "morph",
+        "accumulate": "grow_distribution",
+        "trace": "trace_steps",
+    }
+
     def plan(
         self,
         storyboard: Storyboard,
@@ -138,6 +153,7 @@ class SemanticAnimationPlanner:
 
         beat_windows = self._beat_windows(alignment)
         kind_index = self._kind_index(layout)
+        box_index = self._box_index(layout)
         alias_index = self._alias_index(storyboard)
         events: list[MotionEvent] = []
         for beat in storyboard.beats:
@@ -239,7 +255,81 @@ class SemanticAnimationPlanner:
                         },
                     )
                 )
+            action_count = len(beat.semantic_actions)
+            for action_index, action in enumerate(beat.semantic_actions):
+                action_start = start + (end - start) * action_index / max(
+                    1, action_count
+                )
+                action_end = start + (end - start) * (action_index + 1) / max(
+                    1, action_count
+                )
+                moving_ids = self._action_object_ids(action)
+                path_ids = self._action_path_ids(action)
+                path = [
+                    [
+                        box_index[object_id].x + box_index[object_id].width / 2,
+                        box_index[object_id].y + box_index[object_id].height / 2,
+                    ]
+                    for object_id in path_ids
+                    if object_id in box_index
+                ]
+                available = max(1e-6, end - action_start)
+                slot = max(1e-6, action_end - action_start)
+                duration = min(
+                    available,
+                    max(min(self.MIN_DURATION, available), min(action.duration_hint, slot)),
+                )
+                events.append(MotionEvent(
+                    event_id=f"motion_semantic_{action.action_id}",
+                    beat_id=beat.beat_id,
+                    operation_id=f"semantic_{action.action_id}",
+                    object_ids=moving_ids,
+                    strategy=self._ACTION_STRATEGIES[action.action],
+                    start_time=action_start,
+                    duration=duration,
+                    easing=action.easing,
+                    parameters={
+                        "operation_type": "semantic_action",
+                        "semantic_action": action.action,
+                        "operator": action.operator.value,
+                        "direction": action.direction,
+                        "relation": action.relation.value if action.relation else None,
+                        "trajectory": path,
+                        "state_delta": {
+                            "operands": action.operand_ids,
+                            "preconditions": len(action.preconditions),
+                            "postconditions": len(action.postconditions),
+                        },
+                    },
+                ))
         return MotionPlan(duration=alignment.duration, events=events)
+
+    @staticmethod
+    def _action_object_ids(action: object) -> list[str]:
+        """Choose objects whose pixels visibly express the action delta."""
+
+        for field in ("payload_ids", "item_ids", "path_ids", "member_ids"):
+            value = getattr(action, field, None)
+            if isinstance(value, list) and value:
+                return list(value)
+        source = getattr(action, "source_id", None)
+        if isinstance(source, str):
+            return [source]
+        return list(getattr(action, "operand_ids"))
+
+    @staticmethod
+    def _action_path_ids(action: object) -> list[str]:
+        """Return semantic endpoints/path order for geometry-derived travel."""
+
+        declared = getattr(action, "path_ids", None)
+        source = getattr(action, "source_id", None)
+        target = getattr(action, "target_id", None)
+        if isinstance(source, str) and isinstance(target, str):
+            middle = list(declared) if isinstance(declared, list) else []
+            return list(dict.fromkeys([source, *middle, target]))
+        if isinstance(declared, list):
+            return declared
+        return list(getattr(action, "operand_ids"))
 
     def repair(
         self,
@@ -474,6 +564,21 @@ class SemanticAnimationPlanner:
             index[node.object_id] = (node.kind, operator)
             for child in node.children:
                 visit(child, operator)
+
+        for root in layout.state_roots.values():
+            visit(root)
+        return index
+
+    @staticmethod
+    def _box_index(layout: LayoutPlan) -> dict[str, LayoutBox]:
+        """Index final semantic geometry for action trajectories."""
+
+        index: dict[str, LayoutBox] = {}
+
+        def visit(node: LaidOutNode) -> None:
+            index[node.object_id] = node.box
+            for child in node.children:
+                visit(child)
 
         for root in layout.state_roots.values():
             visit(root)

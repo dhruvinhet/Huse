@@ -115,6 +115,11 @@ class DeterministicQualityEvaluator:
             document,
             findings,
         )
+        scores["semantic_action_coverage"] = self._semantic_action_coverage(
+            artifact_id,
+            storyboard,
+            findings,
+        )
         scores["visual_density"] = self._density_quality(
             artifact_id,
             storyboard,
@@ -652,6 +657,49 @@ class DeterministicQualityEvaluator:
                 patch_paths=[f"/beats/{state_by_beat.get(beat.beat_id, 0)}/operations"],
             ))
         return changed / len(transform_beats)
+
+    @staticmethod
+    def _semantic_action_coverage(
+        artifact_id: str,
+        storyboard: Storyboard | None,
+        findings: list[QualityFinding],
+    ) -> float:
+        """Require typed actions for every beat that promises transformation."""
+
+        if storyboard is None:
+            return 0.5
+        transformation_beats = [
+            beat
+            for beat in storyboard.beats
+            if beat.purpose in {"transform", "demonstrate"}
+        ]
+        if not transformation_beats:
+            return 1.0
+        covered = [beat for beat in transformation_beats if beat.semantic_actions]
+        for beat in transformation_beats:
+            if beat.semantic_actions:
+                continue
+            findings.append(QualityFinding(
+                code="semantic_action_missing",
+                severity=FindingSeverity.ERROR,
+                artifact_id=artifact_id,
+                message=(
+                    f"Transformation beat {beat.beat_id} has no supported typed "
+                    "semantic action."
+                ),
+                repair_target="storyboard",
+                repair_scope="beat",
+                beat_id=beat.beat_id,
+                object_ids=sorted({
+                    target
+                    for operation in beat.operations
+                    for target in operation.target_ids
+                }),
+                measured_value=0.0,
+                required_value=1.0,
+                patch_paths=[f"/beats/{storyboard.beats.index(beat)}/semantic_actions"],
+            ))
+        return len(covered) / len(transformation_beats)
 
     def _flatten(self, root: LaidOutNode) -> list[LaidOutNode]:
         """Flatten one layout hierarchy."""

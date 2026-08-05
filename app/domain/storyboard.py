@@ -6,7 +6,7 @@ from pydantic import Field, JsonValue, model_validator
 
 from app.domain.assets import AssetQuery
 from app.domain.layout import LayoutConstraint
-from app.domain.operations import OperationType, VisualOperation
+from app.domain.operations import OperationType, SemanticAction, VisualOperation
 from app.models.base import BaseModel, NonEmptyString
 
 
@@ -110,6 +110,7 @@ class VisualBeat(BaseModel):
     ] = "introduce"
     estimated_duration: float = Field(gt=0)
     operations: list[VisualOperation] = Field(min_length=1)
+    semantic_actions: list[SemanticAction] = Field(default_factory=list, max_length=8)
     attention: list[AttentionCue] = Field(default_factory=list)
     camera_intent: CameraIntent | None = None
     shot_plan: ShotPlan | None = None

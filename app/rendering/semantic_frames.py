@@ -424,7 +424,9 @@ class SemanticFrameRenderer:
                 continue
             final_box = boxes[node.object_id]
             box = final_box
-            if (
+            if event is not None and event.strategy == "semantic_transfer":
+                box = self._semantic_action_box(final_box, event, progress)
+            elif (
                 event is not None
                 and event.strategy in {"move", "resize", "morph"}
                 and node.object_id in previous_boxes
@@ -527,6 +529,40 @@ class SemanticFrameRenderer:
                 layer.putalpha(alpha)
             canvas.alpha_composite(layer, dest=cached.position)
         return canvas
+
+    @staticmethod
+    def _semantic_action_box(
+        final_box: LayoutBox,
+        event: MotionEvent,
+        progress: float,
+    ) -> LayoutBox:
+        """Move action pixels along the declared semantic trajectory."""
+
+        raw = event.parameters.get("trajectory")
+        if not isinstance(raw, list):
+            return final_box
+        points = [
+            (float(item[0]), float(item[1]))
+            for item in raw
+            if isinstance(item, list)
+            and len(item) == 2
+            and all(isinstance(value, (int, float)) for value in item)
+        ]
+        if len(points) < 2:
+            return final_box
+        segment_progress = min(1.0, max(0.0, progress)) * (len(points) - 1)
+        segment = min(len(points) - 2, int(segment_progress))
+        local = segment_progress - segment
+        current_x = points[segment][0] + (
+            points[segment + 1][0] - points[segment][0]
+        ) * local
+        current_y = points[segment][1] + (
+            points[segment + 1][1] - points[segment][1]
+        ) * local
+        return final_box.model_copy(update={
+            "x": current_x - final_box.width / 2,
+            "y": current_y - final_box.height / 2,
+        })
 
     def _create_object_layer(
         self,

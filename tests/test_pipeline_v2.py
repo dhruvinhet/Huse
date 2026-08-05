@@ -586,10 +586,10 @@ def test_v2_pipeline_survives_invalid_storyboard_and_narration(
     assert renderer.job.document.states[-1].beat_id == "beat_summary"
 
 
-def test_v2_pipeline_rejects_highlight_only_compiled_template_without_model(
+def test_v2_pipeline_accepts_compiled_template_with_typed_action_without_model(
     tmp_path: Path,
 ) -> None:
-    """A reviewed match still bypasses the model but must pass action QA."""
+    """A reviewed match bypasses the model and satisfies action QA explicitly."""
 
     from app.audio import ScenePhraseAligner
     from app.templates import TemplateRegistry
@@ -620,12 +620,15 @@ def test_v2_pipeline_rejects_highlight_only_compiled_template_without_model(
     assert result.total_frames > 0
     assert "Compile Matched Template" in runner.stage_timings
     assert "Plan Storyboard" not in runner.stage_timings
-    assert not renderer.job.document.document_id.startswith("compiled_")
-    assert "Build Deterministic Storyboard Fallback" in runner.stage_timings
+    assert renderer.job.document.document_id.startswith("compiled_")
+    assert "Build Deterministic Storyboard Fallback" not in runner.stage_timings
     compiled_report = runner.last_artifacts[
         "v2/quality/compiled_attempt_0.json"
     ]
-    assert "semantic_state_delta_missing" in {
+    assert "semantic_state_delta_missing" not in {
+        finding.code for finding in compiled_report.findings
+    }
+    assert "semantic_action_missing" not in {
         finding.code for finding in compiled_report.findings
     }
     assert len(renderer.job.document.states) == 4

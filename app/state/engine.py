@@ -12,12 +12,16 @@ from app.domain.visual_document import (
     VisualDocument,
     VisualState,
 )
+from app.state.actions import SemanticActionCompiler
 
 
 class VisualStateTransitionEngine:
     """Materialize deterministic state checkpoints for every visual beat."""
 
     _OBJECT_LIST = TypeAdapter(list[VisualObjectSpec])
+
+    def __init__(self) -> None:
+        self._action_compiler = SemanticActionCompiler()
 
     def materialize(self, storyboard: Storyboard) -> VisualDocument:
         """Apply ordered operations while preserving object identity."""
@@ -28,6 +32,11 @@ class VisualStateTransitionEngine:
         for index, beat in enumerate(storyboard.beats, start=1):
             for operation in beat.operations:
                 self._apply(current, operation)
+            for action in beat.semantic_actions:
+                self._check_conditions(current, action.preconditions, "precondition")
+                for operation in self._action_compiler.lower(action, current):
+                    self._apply(current, operation)
+                self._check_conditions(current, action.postconditions, "postcondition")
             if beat.shot_plan is not None:
                 self._apply_shot_plan(current, beat)
             state_id = f"{storyboard.document_id}_state_{index:04d}"
@@ -45,6 +54,42 @@ class VisualStateTransitionEngine:
             initial_objects=storyboard.initial_objects,
             states=states,
         )
+
+    @staticmethod
+    def _check_conditions(
+        states: dict[str, ObjectState],
+        conditions: list[object],
+        phase: str,
+    ) -> None:
+        """Evaluate typed action conditions against observable semantic state."""
+
+        for condition in conditions:
+            object_id = condition.object_id
+            if object_id not in states:
+                raise ValueError(
+                    f"semantic action {phase} references unknown object {object_id!r}"
+                )
+            state = states[object_id]
+            field = condition.field
+            if field == "lifecycle":
+                actual = state.lifecycle.value
+            elif field == "kind":
+                actual = state.kind
+            elif field == "parent_id":
+                actual = state.parent_id
+            elif field.startswith("content."):
+                actual = state.content.get(field.split(".", maxsplit=1)[1])
+            elif field.startswith("metadata."):
+                actual = state.metadata.get(field.split(".", maxsplit=1)[1])
+            else:
+                raise ValueError(
+                    f"semantic action condition field is unsupported: {field!r}"
+                )
+            if actual != condition.expected:
+                raise ValueError(
+                    f"semantic action {phase} failed for {object_id!r}.{field}: "
+                    f"expected {condition.expected!r}, got {actual!r}"
+                )
 
     def _apply_shot_plan(
         self,

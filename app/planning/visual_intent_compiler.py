@@ -3,7 +3,7 @@
 import re
 
 from app.domain.lesson import LessonPlan
-from app.domain.operations import OperationType, VisualOperation
+from app.domain.operations import OperationType, TraceAction, VisualOperation
 from app.domain.pedagogy import PedagogyPlan, PedagogyShot
 from app.domain.storyboard import (
     AttentionCue,
@@ -318,6 +318,11 @@ class VisualIntentCompiler:
                 purpose=purpose,
                 estimated_duration=10.0 if index == 0 else 6.0,
                 operations=operations,
+                semantic_actions=self._semantic_actions(
+                    shot,
+                    purpose,
+                    [item.object_id for item in active_objects],
+                ),
                 attention=[AttentionCue(
                     cue="focus",
                     target_ids=list(dict.fromkeys(targets)),
@@ -533,6 +538,11 @@ class VisualIntentCompiler:
             purpose=purpose,
             estimated_duration=10.0 if index == 0 else 6.0,
             operations=operations,
+            semantic_actions=self._semantic_actions(
+                shot,
+                purpose,
+                [item.object_id for item in known_objects],
+            ),
             attention=[
                 AttentionCue(
                     cue="focus",
@@ -546,6 +556,29 @@ class VisualIntentCompiler:
             ),
             shot_plan=ShotPlan.for_purpose(purpose),
         )
+
+    @staticmethod
+    def _semantic_actions(
+        shot: ShotSpec,
+        purpose: str,
+        object_ids: list[str],
+    ) -> list[TraceAction]:
+        """Compile transform obligations into a typed, state-changing trace."""
+
+        if purpose not in {"transform", "demonstrate"}:
+            return []
+        path_ids = list(dict.fromkeys(object_ids))[:6]
+        if len(path_ids) < 2:
+            return []
+        return [TraceAction(
+            action_id=f"{shot.shot_id}_trace",
+            operator=shot.renderer_operator,
+            operand_ids=path_ids,
+            path_ids=path_ids,
+            relation=shot.relation,
+            duration_hint=1.2,
+            action="trace",
+        )]
 
     @staticmethod
     def _ensure_relation_connectors(
