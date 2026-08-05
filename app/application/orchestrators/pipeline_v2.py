@@ -174,6 +174,7 @@ class V2PipelineRunner:
         )
         self.stage_timings: dict[str, float] = {}
         self.last_quality_report: QualityReport | None = None
+        self.last_artifacts: dict[str, object] = {}
         self.last_execution_time = 0.0
         self._checkpoints: ArtifactCheckpointStore | None = None
         self._last_artifact_id: str | None = None
@@ -194,6 +195,7 @@ class V2PipelineRunner:
 
         self.stage_timings.clear()
         self.last_quality_report = None
+        self.last_artifacts.clear()
         self._debug.start_run(request.topic)
         self._checkpoints = ArtifactCheckpointStore(
             self._working_path(
@@ -1024,6 +1026,7 @@ class V2PipelineRunner:
     def _record(self, path: str, artifact: object) -> None:
         """Persist a Pydantic or plain artifact in the debug bundle."""
 
+        self.last_artifacts[path] = artifact
         dump = getattr(artifact, "model_dump", None)
         value = dump(mode="json") if callable(dump) else artifact
         self._debug.write_json(path, value)

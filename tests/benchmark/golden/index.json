@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "frames": [
+    {
+      "frame_id": "simple-card",
+      "path": "simple_card.ppm",
+      "purpose": "Verify stable perceptual comparison without exact encoding equality.",
+      "maximum_distance": 0.02
+    }
+  ]
+}

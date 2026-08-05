@@ -1,0 +1,307 @@
+{
+  "schema_version": "1.0",
+  "suite_id": "huse-core-30-v1",
+  "description": "Thirty stable prompts spanning Huse's main pedagogy and visual-operator families.",
+  "cases": [
+    {
+      "case_id": "process-file-transfer",
+      "category": "process",
+      "topic": "How a file moves from a laptop to cloud storage",
+      "learning_goal": "Explain each transfer stage and where the file state changes.",
+      "expected_concepts": ["Local file", "Network request", "Cloud object"],
+      "expected_actions": ["uploads", "stores"],
+      "relation": "flows_to",
+      "seed": 101
+    },
+    {
+      "case_id": "process-water-treatment",
+      "category": "process",
+      "topic": "How drinking water is treated",
+      "learning_goal": "Trace water through filtration, disinfection, and distribution.",
+      "expected_concepts": ["Raw water", "Filtration", "Disinfection", "Distribution"],
+      "expected_actions": ["filters", "disinfects", "delivers"],
+      "relation": "transforms_to",
+      "seed": 102
+    },
+    {
+      "case_id": "process-order-fulfillment",
+      "category": "process",
+      "topic": "How an online order is fulfilled",
+      "learning_goal": "Follow an order from checkout through delivery.",
+      "expected_concepts": ["Checkout", "Inventory pick", "Packing", "Delivery"],
+      "expected_actions": ["requests", "packs", "ships"],
+      "relation": "flows_to",
+      "seed": 103
+    },
+    {
+      "case_id": "hierarchy-file-system",
+      "category": "hierarchy",
+      "topic": "Folder and file hierarchy in a file system",
+      "learning_goal": "Show how directories contain subdirectories and files.",
+      "expected_concepts": ["Root directory", "Folder", "File"],
+      "expected_actions": ["contains", "contains"],
+      "relation": "part_of",
+      "seed": 201
+    },
+    {
+      "case_id": "hierarchy-company",
+      "category": "hierarchy",
+      "topic": "A simple company reporting hierarchy",
+      "learning_goal": "Distinguish organization levels and reporting paths.",
+      "expected_concepts": ["Company", "Department", "Team", "Role"],
+      "expected_actions": ["contains", "contains", "contains"],
+      "relation": "part_of",
+      "seed": 202
+    },
+    {
+      "case_id": "hierarchy-taxonomy",
+      "category": "hierarchy",
+      "topic": "Biological classification hierarchy",
+      "learning_goal": "Explain the nesting from kingdom to species.",
+      "expected_concepts": ["Kingdom", "Phylum", "Class", "Species"],
+      "expected_actions": ["narrows to", "narrows to", "narrows to"],
+      "relation": "part_of",
+      "seed": 203
+    },
+    {
+      "case_id": "comparison-sql-nosql",
+      "category": "comparison",
+      "topic": "Compare SQL and NoSQL databases",
+      "learning_goal": "Choose a database using structure, consistency, and scale criteria.",
+      "expected_concepts": ["SQL database", "NoSQL database", "Decision criteria"],
+      "expected_actions": ["contrasts with", "evaluates"],
+      "relation": "contrasts_with",
+      "seed": 301
+    },
+    {
+      "case_id": "comparison-tcp-udp",
+      "category": "comparison",
+      "topic": "TCP versus UDP",
+      "learning_goal": "Compare reliability, ordering, latency, and use cases.",
+      "expected_concepts": ["TCP", "UDP", "Transport tradeoff"],
+      "expected_actions": ["contrasts with", "informs"],
+      "relation": "contrasts_with",
+      "seed": 302
+    },
+    {
+      "case_id": "comparison-renewables",
+      "category": "comparison",
+      "topic": "Compare solar and wind power",
+      "learning_goal": "Contrast generation conditions, variability, and siting.",
+      "expected_concepts": ["Solar power", "Wind power", "Site conditions"],
+      "expected_actions": ["contrasts with", "constrains"],
+      "relation": "contrasts_with",
+      "seed": 303
+    },
+    {
+      "case_id": "mechanism-greenhouse",
+      "category": "mechanism",
+      "topic": "How the greenhouse effect warms Earth",
+      "learning_goal": "Connect incoming radiation, absorption, and outgoing heat.",
+      "expected_concepts": ["Sunlight", "Surface absorption", "Infrared radiation", "Greenhouse gases"],
+      "expected_actions": ["heats", "emits", "absorbs"],
+      "relation": "causes",
+      "seed": 401
+    },
+    {
+      "case_id": "mechanism-refrigerator",
+      "category": "mechanism",
+      "topic": "How a refrigerator moves heat",
+      "learning_goal": "Trace refrigerant state and heat transfer around the cycle.",
+      "expected_concepts": ["Evaporator", "Compressor", "Condenser", "Expansion valve"],
+      "expected_actions": ["compresses", "releases heat", "expands"],
+      "relation": "flows_to",
+      "seed": 402
+    },
+    {
+      "case_id": "mechanism-vaccine",
+      "category": "mechanism",
+      "topic": "How vaccination builds immune memory",
+      "learning_goal": "Explain antigen recognition, response, and memory formation.",
+      "expected_concepts": ["Antigen", "Immune response", "Memory cells"],
+      "expected_actions": ["triggers", "produces"],
+      "relation": "causes",
+      "seed": 403
+    },
+    {
+      "case_id": "timeline-internet",
+      "category": "timeline",
+      "topic": "Key milestones in the history of the internet",
+      "learning_goal": "Connect early networks, TCP/IP, the web, and broadband in time.",
+      "expected_concepts": ["ARPANET", "TCP/IP adoption", "World Wide Web", "Broadband"],
+      "expected_actions": ["preceded", "enabled", "expanded into"],
+      "relation": "flows_to",
+      "seed": 501
+    },
+    {
+      "case_id": "timeline-cell-theory",
+      "category": "timeline",
+      "topic": "Development of cell theory",
+      "learning_goal": "Order the observations that produced modern cell theory.",
+      "expected_concepts": ["Early microscopes", "Observed cells", "Cell theory", "Modern biology"],
+      "expected_actions": ["enabled", "supported", "informed"],
+      "relation": "causes",
+      "seed": 502
+    },
+    {
+      "case_id": "timeline-spaceflight",
+      "category": "timeline",
+      "topic": "Milestones in human spaceflight",
+      "learning_goal": "Place orbital flight, lunar landing, stations, and commercial flight in sequence.",
+      "expected_concepts": ["Orbital flight", "Lunar landing", "Space stations", "Commercial crew"],
+      "expected_actions": ["preceded", "expanded to", "enabled"],
+      "relation": "flows_to",
+      "seed": 503
+    },
+    {
+      "case_id": "math-quadratic",
+      "category": "math",
+      "topic": "Derive the quadratic formula by completing the square",
+      "learning_goal": "Justify each algebraic transformation from standard form to the formula.",
+      "expected_concepts": ["Standard form", "Normalize", "Complete square", "Quadratic formula"],
+      "expected_actions": ["divide", "rearrange", "solve"],
+      "relation": "transforms_to",
+      "seed": 601
+    },
+    {
+      "case_id": "math-compound-interest",
+      "category": "math",
+      "topic": "Calculate compound interest with a worked example",
+      "learning_goal": "Substitute principal, rate, periods, and time into the compound-interest formula.",
+      "expected_concepts": ["Principal", "Periodic rate", "Compounding periods", "Future value"],
+      "expected_actions": ["sets", "multiplies", "produces"],
+      "relation": "depends_on",
+      "seed": 602
+    },
+    {
+      "case_id": "math-bayes",
+      "category": "math",
+      "topic": "Use Bayes theorem for a medical test example",
+      "learning_goal": "Update a prior probability using sensitivity and false positives.",
+      "expected_concepts": ["Prior probability", "Likelihood", "Evidence", "Posterior probability"],
+      "expected_actions": ["combines", "weights", "updates"],
+      "relation": "transforms_to",
+      "seed": 603
+    },
+    {
+      "case_id": "code-binary-search",
+      "category": "code",
+      "topic": "Trace binary search through a sorted array",
+      "learning_goal": "Show index bounds, midpoint comparison, and the narrowed interval.",
+      "expected_concepts": ["Search interval", "Midpoint", "Comparison", "Updated interval"],
+      "expected_actions": ["selects", "compares", "narrows"],
+      "relation": "transforms_to",
+      "seed": 701
+    },
+    {
+      "case_id": "code-recursion",
+      "category": "code",
+      "topic": "Trace recursive factorial execution",
+      "learning_goal": "Follow call-stack growth, base case, and returned values.",
+      "expected_concepts": ["Function call", "Call stack", "Base case", "Return value"],
+      "expected_actions": ["pushes", "stops", "returns"],
+      "relation": "flows_to",
+      "seed": 702
+    },
+    {
+      "case_id": "code-event-loop",
+      "category": "code",
+      "topic": "How a JavaScript event loop schedules work",
+      "learning_goal": "Trace tasks from the call stack through queues and back to execution.",
+      "expected_concepts": ["Call stack", "Web API", "Task queue", "Event loop"],
+      "expected_actions": ["delegates", "queues", "schedules"],
+      "relation": "flows_to",
+      "seed": 703
+    },
+    {
+      "case_id": "biology-cellular-respiration",
+      "category": "biology",
+      "topic": "How cellular respiration produces ATP",
+      "learning_goal": "Connect glycolysis, the citric acid cycle, and oxidative phosphorylation.",
+      "expected_concepts": ["Glucose", "Glycolysis", "Citric acid cycle", "ATP production"],
+      "expected_actions": ["breaks down", "feeds", "produces"],
+      "relation": "transforms_to",
+      "seed": 801
+    },
+    {
+      "case_id": "biology-neuron",
+      "category": "biology",
+      "topic": "Anatomy of a neuron and signal flow",
+      "learning_goal": "Relate dendrites, cell body, axon, and terminals to signal direction.",
+      "expected_concepts": ["Dendrites", "Cell body", "Axon", "Axon terminals"],
+      "expected_actions": ["receive", "integrates", "transmits"],
+      "relation": "flows_to",
+      "seed": 802
+    },
+    {
+      "case_id": "biology-dna-protein",
+      "category": "biology",
+      "topic": "How DNA information becomes a protein",
+      "learning_goal": "Trace transcription and translation from gene to protein.",
+      "expected_concepts": ["DNA", "Messenger RNA", "Ribosome", "Protein"],
+      "expected_actions": ["transcribes", "carries", "translates"],
+      "relation": "transforms_to",
+      "seed": 803
+    },
+    {
+      "case_id": "finance-balance-sheet",
+      "category": "finance",
+      "topic": "How a balance sheet stays balanced",
+      "learning_goal": "Relate assets, liabilities, and equity using the accounting equation.",
+      "expected_concepts": ["Assets", "Liabilities", "Equity", "Accounting equation"],
+      "expected_actions": ["funded by", "combines with", "balances"],
+      "relation": "depends_on",
+      "seed": 901
+    },
+    {
+      "case_id": "finance-bond-prices",
+      "category": "finance",
+      "topic": "Why bond prices move opposite to interest rates",
+      "learning_goal": "Explain how discount rates change the present value of fixed cash flows.",
+      "expected_concepts": ["Fixed cash flow", "Market interest rate", "Present value", "Bond price"],
+      "expected_actions": ["discounts", "determines", "sets"],
+      "relation": "causes",
+      "seed": 902
+    },
+    {
+      "case_id": "finance-order-book",
+      "category": "finance",
+      "topic": "How a stock-market order book matches trades",
+      "learning_goal": "Trace bids and asks through price-time priority to an execution.",
+      "expected_concepts": ["Bid order", "Ask order", "Matching engine", "Trade"],
+      "expected_actions": ["enters", "compares", "executes"],
+      "relation": "flows_to",
+      "seed": 903
+    },
+    {
+      "case_id": "unknown-velorian-loop",
+      "category": "unfamiliar",
+      "topic": "How a fictional Velorian loop transfers a signal",
+      "learning_goal": "Teach an unfamiliar named system using only the supplied component relations.",
+      "expected_concepts": ["Velorian source", "Ketra relay", "Nomic sink"],
+      "expected_actions": ["sends", "forwards"],
+      "relation": "flows_to",
+      "seed": 1001
+    },
+    {
+      "case_id": "unknown-amberfold",
+      "category": "unfamiliar",
+      "topic": "The fictional Amberfold phase transformation",
+      "learning_goal": "Show a made-up material changing through three explicitly named states.",
+      "expected_concepts": ["Amberfold alpha", "Amberfold beta", "Amberfold gamma"],
+      "expected_actions": ["heats into", "cools into"],
+      "relation": "transforms_to",
+      "seed": 1002
+    },
+    {
+      "case_id": "unknown-orbitweave",
+      "category": "unfamiliar",
+      "topic": "Compare two fictional Orbitweave routing methods",
+      "learning_goal": "Compare invented methods without relying on catalog keyword matches.",
+      "expected_concepts": ["Spiral routing", "Lattice routing", "Selection condition"],
+      "expected_actions": ["contrasts with", "selects"],
+      "relation": "contrasts_with",
+      "seed": 1003
+    }
+  ]
+}
