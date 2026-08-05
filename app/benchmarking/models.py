@@ -92,6 +92,12 @@ class BenchmarkMetrics(BaseModel):
     quality_score: float | None = Field(default=None, ge=0, le=1)
     total_beats: int = Field(default=0, ge=0)
     total_objects: int = Field(default=0, ge=0)
+    peak_memory_bytes: int | None = Field(default=None, ge=0)
+    frame_cache_hit_rate: float | None = Field(default=None, ge=0, le=1)
+    layer_cache_hit_rate: float | None = Field(default=None, ge=0, le=1)
+    keyframe_count: int | None = Field(default=None, ge=0)
+    encoded_frames_per_second: float | None = Field(default=None, ge=0)
+    retained_frame_count: int | None = Field(default=None, ge=0)
 
 
 class BenchmarkCaseResult(BaseModel):

@@ -13,6 +13,7 @@ from app.domain.layout import LaidOutNode, LayoutPlan
 from app.domain.narration import AlignedAudio, NarrationPlan
 from app.domain.operations import OperationType
 from app.domain.quality import QualityReport
+from app.domain.rendering import FrameSequence
 from app.domain.storyboard import Storyboard
 from app.domain.visual_document import ObjectLifecycle, VisualDocument
 from app.benchmarking.models import BenchmarkMetrics
@@ -84,6 +85,7 @@ def collect_metrics(
     alignment: AlignedAudio | None = None,
     quality: QualityReport | None = None,
     duration: float | None = None,
+    frames: FrameSequence | None = None,
 ) -> BenchmarkMetrics:
     """Calculate stable structural metrics from available pipeline artifacts."""
 
@@ -220,6 +222,22 @@ def collect_metrics(
         quality_score=quality.overall_score if quality is not None else None,
         total_beats=total_beats,
         total_objects=total_objects,
+        peak_memory_bytes=frames.peak_memory_bytes if frames else None,
+        frame_cache_hit_rate=(
+            frames.cache_hit_count / frames.total_frames if frames else None
+        ),
+        layer_cache_hit_rate=(
+            frames.layer_cache_hit_count
+            / (frames.layer_cache_hit_count + frames.layer_cache_miss_count)
+            if frames
+            and frames.layer_cache_hit_count + frames.layer_cache_miss_count
+            else None
+        ),
+        keyframe_count=frames.keyframe_count if frames else None,
+        encoded_frames_per_second=(
+            frames.encoded_frames_per_second if frames else None
+        ),
+        retained_frame_count=frames.retained_frame_count if frames else None,
     )
 
 

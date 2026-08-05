@@ -26,6 +26,7 @@ class RenderJob(BaseModel):
     camera: CameraPlan
     manifest: VideoManifest
     output_folder: NonEmptyString
+    keep_frames: bool = True
 
 
 class FrameSequence(BaseModel):
@@ -37,6 +38,14 @@ class FrameSequence(BaseModel):
     fps: int = Field(gt=0)
     sample_paths: list[NonEmptyString] = Field(default_factory=list)
     diagnostics: list[NonEmptyString] = Field(default_factory=list)
+    video_stream_path: str | None = None
+    retained_frame_count: int = Field(default=0, ge=0)
+    keyframe_count: int = Field(default=0, ge=0)
+    cache_hit_count: int = Field(default=0, ge=0)
+    layer_cache_hit_count: int = Field(default=0, ge=0)
+    layer_cache_miss_count: int = Field(default=0, ge=0)
+    peak_memory_bytes: int = Field(default=0, ge=0)
+    encoded_frames_per_second: float | None = Field(default=None, ge=0)
 
 
 class CompositionJob(BaseModel):

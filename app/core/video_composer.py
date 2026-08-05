@@ -189,6 +189,106 @@ class VideoComposer:
             ) from exc
         logger.info("Final video created at {}.", configured_output.as_posix())
 
+    def compose_stream(
+        self,
+        manifest: VideoManifest,
+        audio: AudioMetadata,
+        video_stream: str,
+        output_file: str,
+    ) -> None:
+        """Mux a renderer-produced H.264 MP4 with narration without PNG I/O."""
+
+        if manifest.fps != self.REQUIRED_FPS:
+            raise ValueError(f"video manifest FPS must be {self.REQUIRED_FPS}")
+        working_stream = self._working_path(Path(video_stream))
+        if not working_stream.is_file():
+            raise FileNotFoundError(
+                f"Rendered video stream was not found at {working_stream!s}."
+            )
+        working_audio = self._working_path(Path(audio.file_path))
+        if not working_audio.is_file():
+            raise FileNotFoundError(
+                f"Narration audio was not found at {working_audio!s}."
+            )
+        if abs(manifest.duration - audio.duration) > self.DURATION_TOLERANCE_SECONDS:
+            raise ValueError(
+                "Video manifest and narration durations differ by more than 100 ms."
+            )
+        ffmpeg_executable = self._find_ffmpeg()
+        if ffmpeg_executable is None:
+            raise FFmpegNotFoundError(
+                "FFmpeg is not installed or is not available on PATH."
+            )
+        working_output = self._working_path(Path(output_file))
+        working_output.parent.mkdir(parents=True, exist_ok=True)
+        temporary_output = working_output.with_name(
+            f"{working_output.stem}.tmp{working_output.suffix}"
+        )
+        self._remove_file(temporary_output)
+        command = [
+            ffmpeg_executable,
+            "-y",
+            "-i",
+            str(working_stream),
+            "-i",
+            str(working_audio),
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-frames:v",
+            str(manifest.total_frames),
+            str(temporary_output),
+        ]
+        if self._debug_recorder is not None:
+            self._debug_recorder.write_json(
+                "ffmpeg/command.json",
+                {
+                    "command": command,
+                    "input_mode": "streamed_mp4",
+                    "video_stream": working_stream.as_posix(),
+                    "audio": working_audio.as_posix(),
+                },
+            )
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as exc:
+            self._remove_file(temporary_output)
+            details = exc.stderr.strip() if exc.stderr else str(exc)
+            raise VideoCompositionError(
+                f"FFmpeg failed to mux the streamed video: {details}"
+            ) from exc
+        except OSError as exc:
+            self._remove_file(temporary_output)
+            raise VideoCompositionError(
+                f"FFmpeg could not be executed: {exc}"
+            ) from exc
+        if not temporary_output.is_file():
+            raise VideoCompositionError(
+                "FFmpeg completed without creating the output MP4."
+            )
+        try:
+            stream_info = self._validate_output_streams(
+                temporary_output,
+                manifest.total_frames,
+                manifest.fps,
+                audio.duration,
+            )
+            if self._debug_recorder is not None:
+                self._debug_recorder.write_json(
+                    "ffmpeg/verified_streams.json", stream_info
+                )
+            temporary_output.replace(working_output)
+        except (VideoCompositionError, OSError):
+            self._remove_file(temporary_output)
+            raise
+
     @classmethod
     def _find_ffmpeg(cls) -> str | None:
         """Find FFmpeg from configuration, PATH, or common local installs."""

@@ -302,6 +302,7 @@ class ProviderCaseExecutor:
                 alignment=artifacts.get("v2/audio_alignment.json"),
                 quality=runner.last_quality_report,
                 duration=result.duration,
+                frames=artifacts.get("v2/frame_sequence.json"),
             ),
             selected_templates=self._templates(artifacts),
             selected_operators=self._operators(storyboard),

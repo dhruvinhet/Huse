@@ -17,12 +17,20 @@ class ExistingVideoComposerAdapter:
     def compose(self, job: CompositionJob) -> VideoArtifact:
         """Compose V2 frames and measured audio through the V1 implementation."""
 
-        self._composer.compose(
-            job.manifest,
-            job.audio,
-            job.frames.folder,
-            job.output_file,
-        )
+        if job.frames.video_stream_path:
+            self._composer.compose_stream(
+                job.manifest,
+                job.audio,
+                job.frames.video_stream_path,
+                job.output_file,
+            )
+        else:
+            self._composer.compose(
+                job.manifest,
+                job.audio,
+                job.frames.folder,
+                job.output_file,
+            )
         output_path = Path(job.output_file)
         if not output_path.is_file():
             raise RuntimeError("video composer did not create the requested output")

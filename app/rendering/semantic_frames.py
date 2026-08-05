@@ -2,6 +2,9 @@
 
 import os
 import shutil
+import subprocess
+import time
+import tracemalloc
 from collections import defaultdict, deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -11,7 +14,7 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 from loguru import logger
 
-from app.config.settings import PROJECT_ROOT
+from app.config.settings import PROJECT_ROOT, settings
 from app.design import WhiteboardDesignSystem
 from app.domain.camera import CameraCue, CameraOperation
 from app.domain.assets import AssetPresentation
@@ -62,6 +65,9 @@ class SemanticFrameRenderer:
         self._design = WhiteboardDesignSystem()
         self._font_cache: dict[int, ImageFont.ImageFont] = {}
         self._layer_cache: dict[str, _CachedLayer] = {}
+        self._background_cache: dict[tuple[int, int], Image.Image] = {}
+        self._layer_cache_hits = 0
+        self._layer_cache_misses = 0
         self._semantic_kinds = SemanticKindRegistry()
         self._operator_renderers = OperatorRendererRegistry()
         self._render_diagnostics: set[str] = set()
@@ -118,6 +124,12 @@ class SemanticFrameRenderer:
         """Render all frames or replace a bounded subset in an existing sequence."""
 
         self._render_diagnostics = set(initial_diagnostics)
+        self._layer_cache_hits = 0
+        self._layer_cache_misses = 0
+        if not job.keep_frames and only_frames is not None:
+            # A streamed MP4 is one continuous artifact. Rebuild it atomically;
+            # retained-frame jobs keep the existing bounded window repair path.
+            only_frames = None
         frames_directory = self._working_path(Path(job.output_folder))
         frames_directory.mkdir(parents=True, exist_ok=True)
         if only_frames is None:
@@ -195,10 +207,18 @@ class SemanticFrameRenderer:
         last_signature: tuple[Any, ...] | None = None
         last_rendered_path: Path | None = None
         last_save: Future[None] | None = None
-        previous_beat_id: str | None = None
         beat_index = 0
         rendered_frames = 0
         reused_frames = 0
+        stream_process: subprocess.Popen[bytes] | None = None
+        stream_path: Path | None = None
+        last_rgb: bytes | None = None
+        last_canvas: Image.Image | None = None
+        started_at = time.perf_counter()
+        tracemalloc.start()
+        if not job.keep_frames:
+            stream_path = frames_directory / "video_stream.mp4"
+            stream_process = self._open_video_stream(job, stream_path)
         if self._debug is not None and only_frames is None:
             self._debug.write_text("v2/frames/frame_trace.jsonl", "")
 
@@ -242,20 +262,19 @@ class SemanticFrameRenderer:
                 frame_path = (
                     frames_directory / f"frame_{frame_number:06d}.png"
                 )
+                frame_is_keyframe = signature != last_signature
 
                 if (
                     signature == last_signature
                     and last_rendered_path is not None
                 ):
-                    if last_save is not None:
-                        last_save.result()
-                        last_save = None
-                    self._link_or_copy(last_rendered_path, frame_path)
+                    if job.keep_frames:
+                        if last_save is not None:
+                            last_save.result()
+                            last_save = None
+                        self._link_or_copy(last_rendered_path, frame_path)
                     reused_frames += 1
                 else:
-                    if beat_id != previous_beat_id:
-                        self._layer_cache.clear()
-                        previous_beat_id = beat_id
                     canvas = self._render_state(
                         job,
                         state,
@@ -275,21 +294,36 @@ class SemanticFrameRenderer:
                             cue,
                             timestamp,
                         )
-                    last_save = executor.submit(
-                        self._save_png,
-                        canvas,
-                        frame_path,
-                    )
-                    pending_saves.append(last_save)
+                    last_canvas = canvas
+                    if job.keep_frames:
+                        last_save = executor.submit(
+                            self._save_png,
+                            canvas,
+                            frame_path,
+                        )
+                        pending_saves.append(last_save)
+                    else:
+                        last_rgb = canvas.convert("RGB").tobytes()
                     last_rendered_path = frame_path
                     last_signature = signature
                     rendered_frames += 1
                     if len(pending_saves) > save_workers * 2:
                         pending_saves.popleft().result()
 
+                if stream_process is not None:
+                    if last_rgb is None:
+                        raise RuntimeError("stream renderer produced no frame bytes")
+                    assert stream_process.stdin is not None
+                    stream_process.stdin.write(last_rgb)
+                    if frame_number in sample_frames and last_canvas is not None:
+                        self._save_png(last_canvas, frame_path)
                 if frame_number in sample_frames:
                     samples.append(frame_path.as_posix())
-                if self._debug is not None:
+                if self._debug is not None and (
+                    settings.DEBUG_FRAME_TRACE_FULL
+                    or frame_is_keyframe
+                    or frame_number in sample_frames
+                ):
                     trace_batch.append(
                         self._trace_payload(
                             frame_number,
@@ -309,6 +343,17 @@ class SemanticFrameRenderer:
 
             while pending_saves:
                 pending_saves.popleft().result()
+        if stream_process is not None:
+            assert stream_process.stdin is not None
+            stream_process.stdin.close()
+            stderr = stream_process.stderr.read() if stream_process.stderr else b""
+            return_code = stream_process.wait()
+            if return_code != 0 or stream_path is None or not stream_path.is_file():
+                details = stderr.decode("utf-8", errors="replace").strip()
+                raise RuntimeError(f"FFmpeg raw-frame encoding failed: {details}")
+        _current_memory, peak_memory = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        elapsed = max(time.perf_counter() - started_at, 1e-9)
         if self._debug is not None and trace_batch:
             self._debug.append_jsonl_many(
                 "v2/frames/frame_trace.jsonl",
@@ -333,6 +378,14 @@ class SemanticFrameRenderer:
             fps=job.manifest.fps,
             sample_paths=samples,
             diagnostics=sorted(self._render_diagnostics),
+            video_stream_path=stream_path.as_posix() if stream_path else None,
+            retained_frame_count=len(samples) if stream_path else job.manifest.total_frames,
+            keyframe_count=rendered_frames,
+            cache_hit_count=reused_frames,
+            layer_cache_hit_count=self._layer_cache_hits,
+            layer_cache_miss_count=self._layer_cache_misses,
+            peak_memory_bytes=peak_memory,
+            encoded_frames_per_second=(job.manifest.total_frames / elapsed),
         )
 
     def _render_state(
@@ -349,7 +402,9 @@ class SemanticFrameRenderer:
         """Render one state with active transition effects."""
 
         size = (job.layout.viewport.width, job.layout.viewport.height)
-        canvas = Image.new("RGBA", size, self.BACKGROUND)
+        # Layer pipeline: cached background -> persistent/changed objects ->
+        # connectors -> semantic reveal overlays -> camera composite.
+        canvas = self._background_layer(size).copy()
         events_by_object: dict[str, list[MotionEvent]] = {}
         for event in events:
             for object_id in event.object_ids:
@@ -436,7 +491,7 @@ class SemanticFrameRenderer:
                     node.box,
                     progress,
                 )
-            cache_key = f"{state.state_id}:{node.object_id}"
+            cache_key = self._layer_signature(object_state, box, boxes)
             dynamic_connector = (
                 object_state.kind == "connector"
                 and event is not None
@@ -455,6 +510,7 @@ class SemanticFrameRenderer:
             elif box == final_box:
                 cached = self._layer_cache.get(cache_key)
                 if cached is None:
+                    self._layer_cache_misses += 1
                     cached = self._create_object_layer(
                         size,
                         object_state,
@@ -463,6 +519,8 @@ class SemanticFrameRenderer:
                         job,
                     )
                     self._layer_cache[cache_key] = cached
+                else:
+                    self._layer_cache_hits += 1
             else:
                 cached = self._create_object_layer(
                     size,
@@ -1285,6 +1343,111 @@ class SemanticFrameRenderer:
         """Save one lossless RGB frame outside the rendering thread."""
 
         canvas.convert("RGB").save(frame_path, "PNG")
+
+    def _background_layer(self, size: tuple[int, int]) -> Image.Image:
+        """Return the immutable static background layer for a viewport."""
+
+        cached = self._background_cache.get(size)
+        if cached is None:
+            cached = Image.new("RGBA", size, self.BACKGROUND)
+            self._background_cache[size] = cached
+        return cached
+
+    @classmethod
+    def _open_video_stream(
+        cls,
+        job: RenderJob,
+        stream_path: Path,
+    ) -> subprocess.Popen[bytes]:
+        """Open a bounded-memory raw RGB pipe into a video-only MP4 encoder."""
+
+        ffmpeg = cls._find_ffmpeg()
+        if ffmpeg is None:
+            raise RuntimeError("FFmpeg is required for production frame streaming")
+        stream_path.unlink(missing_ok=True)
+        command = [
+            ffmpeg,
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-s",
+            f"{job.layout.viewport.width}x{job.layout.viewport.height}",
+            "-r",
+            str(job.manifest.fps),
+            "-i",
+            "pipe:0",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            "-frames:v",
+            str(job.manifest.total_frames),
+            str(stream_path),
+        ]
+        return subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    @staticmethod
+    def _find_ffmpeg() -> str | None:
+        """Resolve FFmpeg without importing the legacy composition layer."""
+
+        if settings.FFMPEG_PATH is not None:
+            configured = SemanticFrameRenderer._working_path(settings.FFMPEG_PATH)
+            if not configured.is_file():
+                raise RuntimeError(f"Configured FFmpeg was not found at {configured}")
+            return str(configured)
+        executable = shutil.which("ffmpeg")
+        if executable:
+            return executable
+        for candidate in (
+            Path("C:/ffmpeg/bin/ffmpeg.exe"),
+            Path("C:/Program Files/ffmpeg/bin/ffmpeg.exe"),
+        ):
+            if candidate.is_file():
+                return str(candidate)
+        return None
+
+    @staticmethod
+    def _layer_signature(
+        object_state: ObjectState,
+        box: LayoutBox,
+        boxes: dict[str, LayoutBox],
+    ) -> str:
+        """Key persistent layers by content, style, layout, and dependencies."""
+
+        dependency_boxes: tuple[tuple[str, float, float, float, float], ...] = ()
+        if object_state.kind == "connector":
+            endpoints = (
+                object_state.content.get("source_id"),
+                object_state.content.get("target_id"),
+            )
+            dependency_boxes = tuple(
+                (endpoint, boxes[endpoint].x, boxes[endpoint].y,
+                 boxes[endpoint].width, boxes[endpoint].height)
+                for endpoint in endpoints
+                if isinstance(endpoint, str) and endpoint in boxes
+            )
+        category = "connector" if object_state.kind == "connector" else "persistent"
+        return f"{category}:" + repr(
+            (
+                object_state.object_id,
+                object_state.model_dump(mode="json"),
+                (box.x, box.y, box.width, box.height),
+                dependency_boxes,
+            )
+        )
 
     @staticmethod
     def _link_or_copy(source: Path, destination: Path) -> None:

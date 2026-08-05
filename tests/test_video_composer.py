@@ -229,3 +229,32 @@ def test_audio_and_manifest_duration_must_match(
             str(frames_dir),
             str(output_path),
         )
+
+
+def test_streamed_video_is_muxed_without_png_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The production composer copies renderer video and adds AAC narration."""
+
+    _frames_dir, audio, output_path = composition_inputs(tmp_path)
+    stream_path = tmp_path / "video_stream.mp4"
+    stream_path.write_bytes(b"h264")
+    run_mock = MagicMock(
+        side_effect=lambda command, **_kwargs: Path(command[-1]).write_bytes(
+            b"mp4"
+        )
+    )
+    monkeypatch.setattr(video_composer.shutil, "which", lambda _name: "ffmpeg")
+    monkeypatch.setattr(video_composer.subprocess, "run", run_mock)
+    monkeypatch.setattr(VideoComposer, "_validate_output_streams", MagicMock())
+
+    VideoComposer().compose_stream(
+        sample_manifest(), audio, str(stream_path), str(output_path)
+    )
+
+    command = run_mock.call_args.args[0]
+    assert command[command.index("-c:v") + 1] == "copy"
+    assert command[command.index("-c:a") + 1] == "aac"
+    assert "frame_%06d.png" not in command
+    assert output_path.is_file()

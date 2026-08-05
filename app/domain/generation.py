@@ -41,7 +41,7 @@ class OutputProfile(BaseModel):
     height: int = Field(default=1080, gt=0)
     fps: int = Field(default=30, gt=0)
     format: Literal["mp4"] = "mp4"
-    keep_frames: bool = True
+    keep_frames: bool = False
 
 
 class GenerationRequest(BaseModel):

@@ -312,18 +312,18 @@ Acceptance criteria:
 Primary files: `app/rendering/semantic_frames.py`, video composition code,
 debug recorder/settings, and renderer performance tests.
 
-- [ ] Split static background, persistent object, changed object, connector,
+- [x] Split static background, persistent object, changed object, connector,
   overlay, and camera-composite layers.
-- [ ] Keep valid static/persistent layers across beat boundaries and invalidate
+- [x] Keep valid static/persistent layers across beat boundaries and invalidate
   them by content/style/layout signature.
-- [ ] Render semantic keyframes plus interpolated deltas rather than rebuilding
+- [x] Render semantic keyframes plus interpolated deltas rather than rebuilding
   and writing every full frame.
-- [ ] Stream raw frames to FFmpeg, or use a measured equivalent, without a PNG
+- [x] Stream raw frames to FFmpeg, or use a measured equivalent, without a PNG
   file per output frame.
-- [ ] Preserve a bounded diagnostic frame sample on failure.
-- [ ] Default debug artifacts off for production and sample frame traces by
+- [x] Preserve a bounded diagnostic frame sample on failure.
+- [x] Default debug artifacts off for production and sample frame traces by
   event/keyframe; retain an explicit full-trace mode.
-- [ ] Add partial beat/window rerender support required by T03.
+- [x] Add partial beat/window rerender support required by T03.
 
 Acceptance criteria:
 

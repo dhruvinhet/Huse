@@ -709,6 +709,7 @@ class V2PipelineRunner:
                     camera=camera,
                     manifest=manifest,
                     output_folder=frames_folder,
+                    keep_frames=request.output.keep_frames,
                 )
                 frames_key = self._artifact_cache_key(render_job)
                 if frames_key in frames_cache and RepairStage.RENDERER not in invalidated:
@@ -747,6 +748,7 @@ class V2PipelineRunner:
                         )
                     frames_cache[frames_key] = frames
                 last_frames = frames
+                self._record("v2/frame_sequence.json", frames)
                 rendered_report = self._stage(
                     "Check Rendered Pixels",
                     lambda: RenderedFrameQualityEvaluator().evaluate(

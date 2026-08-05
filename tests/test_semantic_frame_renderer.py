@@ -1,8 +1,10 @@
 """Smoke test for real V2 semantic PNG rendering."""
 
+import io
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 from PIL import Image, ImageChops, ImageDraw
 
 from app.camera import SemanticCameraPlanner
@@ -129,6 +131,115 @@ def test_semantic_renderer_reuses_pixel_identical_hold_frames(
 
     assert renderer._link_or_copy.call_count == 6
     assert len(list(tmp_path.glob("frame_*.png"))) == 8
+
+
+def test_production_renderer_streams_frames_and_keeps_bounded_samples(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production mode sends every RGB frame to FFmpeg without a PNG sequence."""
+
+    class Sink:
+        def __init__(self) -> None:
+            self.data = bytearray()
+
+        def write(self, value: bytes) -> int:
+            self.data.extend(value)
+            return len(value)
+
+        def close(self) -> None:
+            return None
+
+    class Process:
+        def __init__(self) -> None:
+            self.stdin = Sink()
+            self.stderr = io.BytesIO()
+
+        def wait(self) -> int:
+            return 0
+
+    process = Process()
+
+    def open_stream(_job: RenderJob, path: Path) -> Process:
+        path.write_bytes(b"video")
+        return process
+
+    monkeypatch.setattr(
+        SemanticFrameRenderer,
+        "_open_video_stream",
+        staticmethod(open_stream),
+    )
+    board = storyboard()
+    alignment = aligned_audio()
+    document = VisualStateTransitionEngine().materialize(board)
+    layout = HierarchicalLayoutEngine().layout(
+        document,
+        ResolvedAssetSet(),
+        Viewport(width=64, height=36, margin=2),
+    )
+    manifest = PhraseManifestBuilder().build(board, alignment, fps=2)
+    camera = CameraPlan(
+        duration=4,
+        cues=[
+            CameraCue(
+                cue_id=f"cue_{index}",
+                beat_id=f"beat_{index}",
+                start_time=(index - 1) * 2,
+                duration=2,
+                operation=CameraOperation.FIT,
+            )
+            for index in (1, 2)
+        ],
+    )
+    result = SemanticFrameRenderer().render(RenderJob(
+        run_id="stream_test",
+        document=document,
+        assets=ResolvedAssetSet(),
+        layout=layout,
+        motion=MotionPlan(duration=4),
+        camera=camera,
+        manifest=manifest,
+        output_folder=tmp_path.as_posix(),
+        keep_frames=False,
+    ))
+
+    assert len(process.stdin.data) == result.total_frames * 64 * 36 * 3
+    assert result.video_stream_path == (tmp_path / "video_stream.mp4").as_posix()
+    assert result.retained_frame_count == len(result.sample_paths)
+    assert 0 < result.retained_frame_count < result.total_frames
+    assert len(list(tmp_path.glob("frame_*.png"))) == result.retained_frame_count
+    assert result.keyframe_count == 2
+    assert result.cache_hit_count == 6
+    assert len(SemanticFrameRenderer()._layer_cache) == 0
+    assert result.layer_cache_miss_count > 0
+
+
+def test_layer_cache_signature_is_state_independent_and_invalidates_changes() -> None:
+    """Unchanged persistent layers survive beat IDs; content/layout edits do not."""
+
+    renderer = SemanticFrameRenderer()
+    box = LayoutBox(x=10, y=10, width=100, height=40)
+    original = ObjectState(
+        object_id="persistent",
+        kind="component",
+        content={"label": "Stable"},
+    )
+    same_next_beat = original.model_copy(deep=True)
+    changed = original.model_copy(update={"content": {"label": "Changed"}})
+
+    original_key = renderer._layer_signature(original, box, {"persistent": box})
+
+    assert renderer._layer_signature(
+        same_next_beat, box, {"persistent": box}
+    ) == original_key
+    assert renderer._layer_signature(
+        changed, box, {"persistent": box}
+    ) != original_key
+    assert renderer._layer_signature(
+        original,
+        LayoutBox(x=20, y=10, width=100, height=40),
+        {"persistent": box},
+    ) != original_key
 
 
 def test_renderer_repair_replaces_only_affected_frames(tmp_path: Path) -> None:

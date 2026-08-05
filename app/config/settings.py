@@ -29,6 +29,7 @@ class Settings(BaseModel):
     LOG_LEVEL: str
     FFMPEG_PATH: Path | None
     DEBUG_ARTIFACTS: bool
+    DEBUG_FRAME_TRACE_FULL: bool
     DEBUG_DIR: Path
     PIPELINE_VERSION: str
     V2_MAX_REPAIR_ATTEMPTS: int
@@ -60,7 +61,9 @@ settings = Settings(
         if (value := getenv("FFMPEG_PATH", "").strip())
         else None
     ),
-    DEBUG_ARTIFACTS=getenv("DEBUG_ARTIFACTS", "true"),
+    DEBUG_ARTIFACTS=getenv("DEBUG_ARTIFACTS", "false"),
+    DEBUG_FRAME_TRACE_FULL=getenv("DEBUG_FRAME_TRACE_FULL", "false").lower()
+    in {"1", "true", "yes", "on"},
     DEBUG_DIR=Path(getenv("DEBUG_DIR", "outputs/debug")),
     PIPELINE_VERSION=getenv("PIPELINE_VERSION", "v2").strip().lower(),
     V2_MAX_REPAIR_ATTEMPTS=getenv("V2_MAX_REPAIR_ATTEMPTS", "2"),
