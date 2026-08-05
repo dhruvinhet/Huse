@@ -6,6 +6,7 @@ from statistics import median
 
 from PIL import Image, ImageChops
 
+from app.design import WhiteboardDesignSystem
 from app.domain.camera import CameraOperation, CameraPlan
 from app.domain.layout import LaidOutNode, LayoutPlan
 from app.domain.quality import (
@@ -234,6 +235,7 @@ class RenderedFrameQualityEvaluator:
             layout.viewport.height / 1080.0,
         )
         required_font = self._policy.minimum_effective_font_px * output_scale
+        design = WhiteboardDesignSystem()
         for state_id, root in layout.state_roots.items():
             state = states.get(state_id)
             if state is None:
@@ -249,7 +251,13 @@ class RenderedFrameQualityEvaluator:
                 )
                 if not paints_text:
                     continue
-                estimated_font = min(36.0, max(12.0, node.box.height * 0.22))
+                # The renderer selects typography from the semantic kind and
+                # style token; box height is not its font-size formula. The old
+                # proxy incorrectly classified compact 30px callouts as 18px.
+                estimated_font = (
+                    design.resolve(content.kind, content.style_token).font_size
+                    * output_scale
+                )
                 if estimated_font < required_font:
                     unreadable.append(node.object_id)
         if unreadable:

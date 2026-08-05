@@ -287,6 +287,7 @@ class SemanticFrameRenderer:
                     )
                     if cue is not None and cue.operation not in {
                         CameraOperation.FIT,
+                        CameraOperation.FOCUS,
                         CameraOperation.HOLD,
                     }:
                         canvas = self._apply_camera(
@@ -1480,13 +1481,19 @@ class SemanticFrameRenderer:
 
         selected: set[str] = set()
         for anchor in anchors:
-            root_id = anchor
-            while state.object_states[root_id].parent_id is not None:
-                parent_id = state.object_states[root_id].parent_id
+            # A focus cue names the semantic subtree to show. Expanding an
+            # anchored card back to its top-level scene selected every sibling,
+            # then the camera cropped those unrelated siblings at the edge.
+            # Fit the named subtree directly; FIT cues already name the whole
+            # scene when full context is required.
+            selected.update(self._state_descendants(state, anchor))
+            current_id = anchor
+            while state.object_states[current_id].parent_id is not None:
+                parent_id = state.object_states[current_id].parent_id
                 if parent_id is None or parent_id not in known:
                     break
-                root_id = parent_id
-            selected.update(self._state_descendants(state, root_id))
+                selected.add(parent_id)
+                current_id = parent_id
 
         changed = True
         while changed:
@@ -1715,6 +1722,7 @@ class SemanticFrameRenderer:
             round(self._cue_progress(cue, timestamp), 8)
             if cue is not None and cue.operation not in {
                 CameraOperation.FIT,
+                CameraOperation.FOCUS,
                 CameraOperation.HOLD,
             }
             else 1.0
@@ -2414,9 +2422,15 @@ class SemanticFrameRenderer:
 
     @staticmethod
     def _sample_frames(job: RenderJob) -> set[int]:
-        """Select first, middle, and last frames for each manifest scene."""
+        """Select opening evidence plus scene transition and final frames."""
 
-        samples: set[int] = set()
+        opening_limit = min(
+            job.manifest.total_frames,
+            max(1, round(job.manifest.fps * 2)),
+        )
+        samples = set(
+            range(1, opening_limit + 1, max(1, job.manifest.fps // 4))
+        )
         for scene in job.manifest.scenes:
             samples.update(
                 {

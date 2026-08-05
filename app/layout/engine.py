@@ -434,7 +434,12 @@ class HierarchicalLayoutEngine:
         }))
         if not grow and not shrink:
             return candidate
-        factor = 1.12 if grow else 0.90
+        # Clipping is a hard constraint. When pixel QA reports both small text
+        # and unsafe edges, growing the entire composition makes the latter
+        # strictly worse and causes the next compiled preflight to fail before
+        # it can render. Prefer the safe global correction; typography is
+        # evaluated against the renderer's real design tokens downstream.
+        factor = 0.90 if shrink else 1.12
         repaired = previous.model_copy(deep=True)
         center_x = repaired.viewport.width / 2
         center_y = repaired.viewport.height / 2

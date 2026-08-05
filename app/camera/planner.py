@@ -77,6 +77,12 @@ class SemanticCameraPlanner:
             )
             measured_change = self._source_delta(target_bounds, previous_source)
             exempt = operation in {CameraOperation.FIT, CameraOperation.HOLD}
+            if not exempt and measured_change < self._minimum_visible_change_px:
+                # Two consecutive focus requests can resolve to the same crop.
+                # Represent that truthfully as a static hold instead of
+                # declaring a zero-distance camera move that pixel QA rejects.
+                operation = CameraOperation.HOLD
+                exempt = True
             source_width = max(
                 1.0,
                 target_bounds["source_right"] - target_bounds["source_left"],

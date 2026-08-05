@@ -1,6 +1,8 @@
 """Interactive command-line demo for the end-to-end video pipeline."""
 
+import argparse
 from pathlib import Path
+from uuid import uuid4
 
 from app.application.orchestrators import V2PipelineRunner
 from app.config.settings import settings
@@ -10,26 +12,52 @@ from app.domain.generation import (
     GenerationRequest,
     PipelineVersion,
 )
+from app.observability import ArtifactCheckpointStore
 from app.utils.logger import initialize_logger
-from uuid import uuid4
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """Prompt for a topic, execute the pipeline, and print its summary."""
 
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--topic", help="Topic for a new generation run.")
+    parser.add_argument(
+        "--resume",
+        metavar="RUN_ID",
+        help="Resume a V2 run from its latest compatible checkpoints.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="outputs",
+        help="Pipeline output directory (default: outputs).",
+    )
+    args = parser.parse_args(argv)
     initialize_logger(settings.LOG_LEVEL)
-    topic = input("Enter Topic: ").strip()
     version = PipelineVersion(settings.PIPELINE_VERSION)
     if version is PipelineVersion.V2:
-        runner_v2 = V2PipelineRunner()
-        result = runner_v2.run(
-            GenerationRequest(
+        if args.resume:
+            checkpoint_store = ArtifactCheckpointStore(
+                Path(args.output_dir) / "checkpoints" / args.resume
+            )
+            request = checkpoint_store.load("v2 request", GenerationRequest)
+            topic = request.topic
+        else:
+            topic = (args.topic or input("Enter Topic: ")).strip()
+            if not topic:
+                parser.error("topic cannot be empty")
+            request = GenerationRequest(
                 run_id=f"v2_{uuid4().hex}",
                 topic=topic,
                 audience=AudienceProfile(
                     learning_goal=f"Understand {topic}",
                 ),
             )
+        print(f"Run ID: {request.run_id}")
+        runner_v2 = V2PipelineRunner()
+        result = runner_v2.run(
+            request,
+            output_dir=args.output_dir,
+            resume=bool(args.resume),
         )
         video_location = result.output_file
         print(f"Video location: {video_location}")
@@ -48,6 +76,9 @@ def main() -> None:
         print("=====================================")
         return
 
+    if args.resume:
+        parser.error("--resume is supported only by the V2 pipeline")
+    topic = (args.topic or input("Enter Topic: ")).strip()
     runner = PipelineRunner()
     video_location = runner.run(topic)
 

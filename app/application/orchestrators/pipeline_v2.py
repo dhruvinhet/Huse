@@ -40,14 +40,19 @@ from app.camera import SemanticCameraPlanner
 from app.config.settings import settings
 from app.core.audio_manager import AudioManager
 from app.core.video_composer import VideoComposer
+from app.domain.assets import ResolvedAssetSet
+from app.domain.camera import CameraPlan
 from app.domain.generation import AudienceProfile, GenerationRequest, GenerationResult
+from app.domain.layout import LayoutPlan
 from app.domain.lesson import LessonPlan
-from app.domain.narration import NarrationPhrase, NarrationPlan
+from app.domain.motion import MotionPlan
+from app.domain.narration import AlignedAudio, NarrationPhrase, NarrationPlan
 from app.domain.pedagogy import PedagogyPlan
 from app.domain.quality import EvaluationDecision, QualityReport
 from app.domain.repair import RepairPlan, RepairStage
-from app.domain.rendering import CompositionJob, RenderJob
+from app.domain.rendering import CompositionJob, FrameSequence, RenderJob
 from app.domain.storyboard import ShotPlan, Storyboard
+from app.domain.visual_document import VisualDocument
 from app.knowledge import InMemoryVisualKnowledgeBase
 from app.layout import HierarchicalLayoutEngine
 from app.motion import SemanticAnimationPlanner
@@ -79,6 +84,8 @@ from app.templates import TemplateRegistry, builtin_templates
 from app.timeline import PhraseManifestBuilder
 from app.utils.debug_recorder import DebugRecorder
 from app.validation import DomainValidator, LessonGroundingValidator
+from app.models.audio import AudioMetadata
+from app.models.video_manifest import VideoManifest
 
 
 StageT = TypeVar("StageT")
@@ -472,7 +479,15 @@ class V2PipelineRunner:
                     thread_name_prefix="v2-post-storyboard",
                 ) as executor:
                     narration_future = None
-                    if (
+                    resumed_narration = (
+                        self._resume_checkpoint("v2 narration", NarrationPlan)
+                        if resume and attempt == 0
+                        else None
+                    )
+                    if resumed_narration is not None:
+                        narration = resumed_narration
+                        narration_cache[narration_key] = narration.model_copy(deep=True)
+                    elif (
                         narration_key in narration_cache
                         and RepairStage.NARRATION not in invalidated
                     ):
@@ -495,7 +510,15 @@ class V2PipelineRunner:
                             ),
                         )
                     assets_future = None
-                    if (
+                    resumed_assets = (
+                        self._resume_checkpoint("v2 assets", ResolvedAssetSet)
+                        if resume and attempt == 0
+                        else None
+                    )
+                    if resumed_assets is not None:
+                        assets = resumed_assets
+                        assets_cache[storyboard_key] = assets
+                    elif (
                         storyboard_key in assets_cache
                         and RepairStage.ASSETS not in invalidated
                     ):
@@ -519,7 +542,15 @@ class V2PipelineRunner:
                 self._record("v2/narration.json", narration)
                 self._record("v2/assets.json", assets)
                 audio_key = self._artifact_cache_key(narration, request.voice)
-                if audio_key in audio_cache and RepairStage.AUDIO not in invalidated:
+                resumed_audio = (
+                    self._resume_audio(output_dir, request.voice)
+                    if resume and attempt == 0
+                    else None
+                )
+                if resumed_audio is not None:
+                    audio = resumed_audio
+                    audio_cache[audio_key] = audio
+                elif audio_key in audio_cache and RepairStage.AUDIO not in invalidated:
                     audio = audio_cache[audio_key]
                     logger.info("Reusing synthesized narration audio.")
                 else:
@@ -528,8 +559,17 @@ class V2PipelineRunner:
                         lambda: self._speech.synthesize(narration, request.voice),
                     )
                     audio_cache[audio_key] = audio
+                self._record("v2/audio.json", audio)
                 alignment_key = self._artifact_cache_key(narration, audio)
-                if (
+                resumed_alignment = (
+                    self._resume_checkpoint("v2 audio alignment", AlignedAudio)
+                    if resume and attempt == 0
+                    else None
+                )
+                if resumed_alignment is not None:
+                    alignment = resumed_alignment
+                    alignment_cache[alignment_key] = alignment
+                elif (
                     alignment_key in alignment_cache
                     and RepairStage.AUDIO not in invalidated
                 ):
@@ -542,7 +582,15 @@ class V2PipelineRunner:
                     )
                     alignment_cache[alignment_key] = alignment
                 self._record("v2/audio_alignment.json", alignment)
-                if (
+                resumed_document = (
+                    self._resume_checkpoint("v2 visual document", VisualDocument)
+                    if resume and attempt == 0
+                    else None
+                )
+                if resumed_document is not None:
+                    document = resumed_document
+                    document_cache[storyboard_key] = document
+                elif (
                     storyboard_key in document_cache
                     and RepairStage.STATE not in invalidated
                 ):
@@ -566,7 +614,15 @@ class V2PipelineRunner:
                     assets,
                     viewport_model,
                 )
-                if layout_key in layout_cache and RepairStage.LAYOUT not in invalidated:
+                resumed_layout = (
+                    self._resume_checkpoint("v2 layout", LayoutPlan)
+                    if resume and attempt == 0
+                    else None
+                )
+                if resumed_layout is not None:
+                    layout = resumed_layout
+                    layout_cache[layout_key] = layout
+                elif layout_key in layout_cache and RepairStage.LAYOUT not in invalidated:
                     layout = layout_cache[layout_key]
                     logger.info("Reusing solved layout.")
                 else:
@@ -600,7 +656,15 @@ class V2PipelineRunner:
                     layout_cache[layout_key] = layout
                 self._record("v2/layout.json", layout)
                 motion_key = self._artifact_cache_key(storyboard, layout, alignment)
-                if motion_key in motion_cache and RepairStage.MOTION not in invalidated:
+                resumed_motion = (
+                    self._resume_checkpoint("v2 motion", MotionPlan)
+                    if resume and attempt == 0
+                    else None
+                )
+                if resumed_motion is not None:
+                    motion = resumed_motion
+                    motion_cache[motion_key] = motion
+                elif motion_key in motion_cache and RepairStage.MOTION not in invalidated:
                     motion = motion_cache[motion_key]
                     logger.info("Reusing motion plan.")
                 else:
@@ -629,7 +693,15 @@ class V2PipelineRunner:
                         )
                     motion_cache[motion_key] = motion
                 camera_key = self._artifact_cache_key(storyboard, layout, alignment)
-                if camera_key in camera_cache and RepairStage.CAMERA not in invalidated:
+                resumed_camera = (
+                    self._resume_checkpoint("v2 camera", CameraPlan)
+                    if resume and attempt == 0
+                    else None
+                )
+                if resumed_camera is not None:
+                    camera = resumed_camera
+                    camera_cache[camera_key] = camera
+                elif camera_key in camera_cache and RepairStage.CAMERA not in invalidated:
                     camera = camera_cache[camera_key]
                     logger.info("Reusing camera plan.")
                 else:
@@ -702,14 +774,24 @@ class V2PipelineRunner:
                     )
                     continue
 
-                manifest = self._stage(
-                    "Build Manifest",
-                    lambda: self._manifest_builder.build(
-                        storyboard,
-                        alignment,
-                        fps=request.output.fps,
-                    ),
+                manifest = (
+                    self._resume_checkpoint(
+                        "v2 video manifest",
+                        VideoManifest,
+                        schema_version="1.0",
+                    )
+                    if resume and attempt == 0
+                    else None
                 )
+                if manifest is None:
+                    manifest = self._stage(
+                        "Build Manifest",
+                        lambda: self._manifest_builder.build(
+                            storyboard,
+                            alignment,
+                            fps=request.output.fps,
+                        ),
+                    )
                 self._record("v2/video_manifest.json", manifest)
                 frames_folder = (
                     Path(settings.TEMP_DIR)
@@ -729,7 +811,25 @@ class V2PipelineRunner:
                     keep_frames=request.output.keep_frames,
                 )
                 frames_key = self._artifact_cache_key(render_job)
-                if frames_key in frames_cache and RepairStage.RENDERER not in invalidated:
+                resumed_render_job = (
+                    self._resume_checkpoint("v2 render job", RenderJob)
+                    if resume and attempt == 0
+                    else None
+                )
+                resumed_frames = None
+                if resumed_render_job == render_job:
+                    resumed_frames = self._resume_checkpoint(
+                        "v2 frame sequence",
+                        FrameSequence,
+                        schema_version="1.0",
+                    )
+                self._record("v2/render_job.json", render_job)
+                if resumed_frames is not None and self._frame_sequence_available(
+                    resumed_frames
+                ):
+                    frames = resumed_frames
+                    frames_cache[frames_key] = frames
+                elif frames_key in frames_cache and RepairStage.RENDERER not in invalidated:
                     frames = frames_cache[frames_key]
                     logger.info("Reusing rendered frame sequence.")
                 else:
@@ -871,6 +971,87 @@ class V2PipelineRunner:
                 self.stage_timings,
                 error,
             )
+
+    def _resume_checkpoint(
+        self,
+        stage: str,
+        model_type: type[StageT],
+        *,
+        schema_version: str = "2.0",
+    ) -> StageT | None:
+        """Load one compatible run checkpoint and safely fall back if stale."""
+
+        if self._checkpoints is None or not self._checkpoints.has(
+            stage,
+            schema_version=schema_version,
+        ):
+            return None
+        try:
+            artifact = self._checkpoints.load(
+                stage,
+                model_type,
+                schema_version=schema_version,
+            )
+        except (OSError, ValueError) as exc:
+            logger.warning("Ignoring unusable checkpoint {}: {}", stage, exc)
+            return None
+        logger.info("Resumed checkpoint: {}.", stage)
+        return artifact
+
+    def _resume_audio(
+        self,
+        output_dir: str,
+        voice: str,
+    ) -> AudioMetadata | None:
+        """Load run-scoped audio, with compatibility for older checkpoints."""
+
+        checkpoint = self._resume_checkpoint(
+            "v2 audio",
+            AudioMetadata,
+            schema_version="1.0",
+        )
+        if checkpoint is not None:
+            return checkpoint if Path(checkpoint.file_path).is_file() else None
+
+        # Older runs wrote the audio manifest beside the MP3 but did not add it
+        # to the run checkpoint. Validate it against run-scoped alignment before
+        # accepting the compatibility artifact.
+        manifest_path = self._working_path(
+            Path(output_dir) / "audio" / "audio_manifest.json"
+        )
+        if not manifest_path.is_file():
+            return None
+        try:
+            audio = AudioMetadata.model_validate_json(manifest_path.read_bytes())
+            alignment = self._resume_checkpoint(
+                "v2 audio alignment",
+                AlignedAudio,
+            )
+        except (OSError, ValueError) as exc:
+            logger.warning("Ignoring legacy audio checkpoint: {}", exc)
+            return None
+        if (
+            alignment is None
+            or audio.voice != voice
+            or abs(audio.duration - alignment.duration) > 1e-6
+            or audio.sample_rate != alignment.sample_rate
+            or not Path(audio.file_path).is_file()
+        ):
+            return None
+        logger.info("Resumed legacy narration audio manifest.")
+        return audio
+
+    @staticmethod
+    def _frame_sequence_available(frames: FrameSequence) -> bool:
+        """Require a retained stream or complete frame folder before reuse."""
+
+        if frames.video_stream_path and Path(frames.video_stream_path).is_file():
+            return all(Path(path).is_file() for path in frames.sample_paths)
+        folder = Path(frames.folder)
+        return folder.is_dir() and all(
+            (folder / (frames.pattern % number)).is_file()
+            for number in (1, frames.total_frames)
+        )
 
     def _repair_or_raise(
         self,
