@@ -7,6 +7,9 @@ from PIL import Image, ImageChops, ImageDraw
 
 from app.camera import SemanticCameraPlanner
 from app.domain.assets import (
+    AssetKind,
+    AssetPresentation,
+    AssetQuery,
     AssetSource,
     ResolvedAssetSet,
     ResolvedSemanticAsset,
@@ -15,6 +18,7 @@ from app.domain.camera import CameraCue, CameraOperation, CameraPlan
 from app.domain.layout import LayoutBox, Viewport
 from app.domain.motion import MotionEvent, MotionPlan
 from app.domain.rendering import FrameSequence, RenderJob
+from app.domain.storyboard import VisualObjectSpec
 from app.domain.quality import (
     EvaluationDecision,
     FindingSeverity,
@@ -27,6 +31,7 @@ from app.motion import SemanticAnimationPlanner
 from app.rendering import SemanticFrameRenderer
 from app.rendering.operator_plugins import OperatorRendererRegistry
 from app.quality import QualityRepairPlanner, RenderedFrameQualityEvaluator
+from app.semantic_assets import CatalogSemanticAssetResolver
 from app.state import VisualStateTransitionEngine
 from app.timeline import PhraseManifestBuilder
 from tests.test_domain_v2 import storyboard
@@ -354,6 +359,7 @@ def test_component_card_renders_its_resolved_semantic_asset(tmp_path: Path) -> N
             asset_id="asset_concept",
             query_digest="digest",
             source=AssetSource.GENERATED,
+            presentation=AssetPresentation.DIAGRAM,
             path=icon.as_posix(),
             mime_type="image/svg+xml",
             license_id="generated-internal",
@@ -384,6 +390,111 @@ def test_component_card_renders_its_resolved_semantic_asset(tmp_path: Path) -> N
     left_crop = canvas.crop((50, 70, 140, 170)).convert("RGB")
     white = Image.new("RGB", left_crop.size, "white")
     assert ImageChops.difference(left_crop, white).getbbox() is not None
+
+
+def test_unknown_concept_diagram_is_visible_even_with_legacy_left_slot(
+    tmp_path: Path,
+) -> None:
+    """A generated composition is a full diagram and is never silently skipped."""
+
+    concept = "purple quasar luminosity"
+    item = VisualObjectSpec(
+        object_id="quasar_art",
+        kind="semantic_asset",
+        semantic_role="concept_illustration",
+        content={"asset_slot": "left"},
+        asset_query=AssetQuery(
+            concept=concept,
+            asset_kind=AssetKind.LINE_ART,
+            style_id="whiteboard.default",
+        ),
+        accessibility_label=f"{concept} illustration",
+    )
+    board = storyboard().model_copy(update={"initial_objects": [item]}, deep=True)
+    asset = CatalogSemanticAssetResolver(generated_dir=tmp_path).resolve(board).assets[0]
+    job = MagicMock()
+    job.assets = ResolvedAssetSet(assets=[asset])
+    state = ObjectState(
+        object_id=item.object_id,
+        kind="semantic_asset",
+        content={"asset_slot": "left"},
+        metadata={"accessibility_label": item.accessibility_label},
+    )
+    canvas = Image.new("RGBA", (600, 600), (255, 255, 255, 255))
+
+    SemanticFrameRenderer()._draw_object(
+        canvas,
+        state,
+        LayoutBox(x=50, y=50, width=500, height=500),
+        {item.object_id: LayoutBox(x=50, y=50, width=500, height=500)},
+        job,
+    )
+
+    difference = ImageChops.difference(
+        canvas.convert("RGB"), Image.new("RGB", canvas.size, "white")
+    )
+    bounds = difference.getbbox()
+    assert asset.presentation is AssetPresentation.DIAGRAM
+    assert bounds is not None
+    assert 50 < bounds[0] < bounds[2] < 550
+    assert 50 < bounds[1] < bounds[3] < 550
+    assert concept in Path(asset.path).read_text(encoding="utf-8")
+
+
+def test_broken_semantic_asset_paints_fallback_and_reports_finding(
+    tmp_path: Path,
+) -> None:
+    """Backend failure remains visible and becomes structured QA evidence."""
+
+    job = MagicMock()
+    job.assets = ResolvedAssetSet(assets=[ResolvedSemanticAsset(
+        asset_id="asset_broken_art",
+        query_digest="broken-digest",
+        source=AssetSource.GENERATED,
+        presentation=AssetPresentation.DIAGRAM,
+        path=(tmp_path / "missing.svg").as_posix(),
+        mime_type="image/svg+xml",
+        content_hash="missing-hash",
+        editable=True,
+        ready=True,
+    )])
+    state = ObjectState(
+        object_id="broken_art",
+        kind="semantic_asset",
+        metadata={"accessibility_label": "Broken concept illustration"},
+    )
+    canvas = Image.new("RGBA", (320, 240), (255, 255, 255, 255))
+    renderer = SemanticFrameRenderer()
+
+    renderer._draw_object(
+        canvas,
+        state,
+        LayoutBox(x=40, y=30, width=240, height=180),
+        {"broken_art": LayoutBox(x=40, y=30, width=240, height=180)},
+        job,
+    )
+    frame_path = tmp_path / "frame_000001.png"
+    canvas.convert("RGB").save(frame_path)
+    frames = FrameSequence(
+        folder=tmp_path.as_posix(),
+        total_frames=1,
+        fps=1,
+        sample_paths=[frame_path.as_posix()],
+        diagnostics=sorted(renderer._render_diagnostics),
+    )
+
+    report = RenderedFrameQualityEvaluator().evaluate(frames)
+
+    assert renderer._render_diagnostics
+    assert ImageChops.difference(
+        canvas.convert("RGB"), Image.new("RGB", canvas.size, "white")
+    ).getbbox() is not None
+    finding = next(
+        item for item in report.findings
+        if item.code == "semantic_asset_render_failed"
+    )
+    assert finding.object_ids == ["broken_art"]
+    assert finding.repair_target == "assets"
 
 
 def test_rendered_pixel_gate_rejects_a_blank_opening(tmp_path: Path) -> None:

@@ -14,6 +14,7 @@ from loguru import logger
 from app.config.settings import PROJECT_ROOT
 from app.design import WhiteboardDesignSystem
 from app.domain.camera import CameraCue, CameraOperation
+from app.domain.assets import AssetPresentation
 from app.domain.layout import LaidOutNode, LayoutBox, Viewport
 from app.domain.motion import MotionEvent
 from app.domain.rendering import FrameSequence, RenderJob
@@ -63,6 +64,7 @@ class SemanticFrameRenderer:
         self._layer_cache: dict[str, _CachedLayer] = {}
         self._semantic_kinds = SemanticKindRegistry()
         self._operator_renderers = OperatorRendererRegistry()
+        self._render_diagnostics: set[str] = set()
         unsupported = [
             kind
             for kind in self._semantic_kinds.names()
@@ -76,7 +78,7 @@ class SemanticFrameRenderer:
     def render(self, job: RenderJob) -> FrameSequence:
         """Render all manifest frames as a continuous deterministic sequence."""
 
-        return self._render(job, None)
+        return self._render(job, None, set())
 
     def repair(
         self,
@@ -86,7 +88,6 @@ class SemanticFrameRenderer:
     ) -> FrameSequence:
         """Rerender only affected beats, frames, and their transition edges."""
 
-        del previous
         affected = set(repair.frame_numbers)
         if repair.beat_ids:
             state_order = [state.beat_id for state in job.document.states]
@@ -99,15 +100,24 @@ class SemanticFrameRenderer:
                     affected.add(scene.frame_start - 1)
                 if scene.frame_end < job.manifest.total_frames:
                     affected.add(scene.frame_end + 1)
-        return self._render(job, affected or None)
+        repaired_objects = set(repair.object_ids)
+        preserved_diagnostics = {
+            item
+            for item in previous.diagnostics
+            if not any(item.startswith(f"semantic_asset_render_failed:{object_id}:")
+                       for object_id in repaired_objects)
+        }
+        return self._render(job, affected or None, preserved_diagnostics)
 
     def _render(
         self,
         job: RenderJob,
         only_frames: set[int] | None,
+        initial_diagnostics: set[str],
     ) -> FrameSequence:
         """Render all frames or replace a bounded subset in an existing sequence."""
 
+        self._render_diagnostics = set(initial_diagnostics)
         frames_directory = self._working_path(Path(job.output_folder))
         frames_directory.mkdir(parents=True, exist_ok=True)
         if only_frames is None:
@@ -322,6 +332,7 @@ class SemanticFrameRenderer:
             total_frames=job.manifest.total_frames,
             fps=job.manifest.fps,
             sample_paths=samples,
+            diagnostics=sorted(self._render_diagnostics),
         )
 
     def _render_state(
@@ -989,18 +1000,8 @@ class SemanticFrameRenderer:
             end_time=1,
         )
         renderer = self._svg_renderer if is_svg else self._image_renderer
-        generated_asset = asset.path.replace("\\", "/").startswith(
-            "temp/v2/semantic_assets/"
-        )
-        # These generated files are full mini-diagrams rather than icons.
-        # Painting them into a small card slot produces clipped arrows,
-        # opaque black fragments, and tiny duplicate captions.  The card
-        # remains fully rendered and keeps its own readable label/detail;
-        # generated artwork is still available for dedicated semantic_asset
-        # objects where its full aspect ratio is respected.
-        if generated_asset and state.content.get("asset_slot") == "left":
-            return
-        if not generated_asset:
+        is_diagram = asset.presentation is AssetPresentation.DIAGRAM
+        if not is_diagram:
             # Catalog SVGs are icons, not full-card illustrations.  Render
             # them in a bounded centered square so their fallback stroke
             # geometry cannot dominate the concept card.
@@ -1013,8 +1014,35 @@ class SemanticFrameRenderer:
                     "height": icon_size,
                 }
             )
+        else:
+            # Leave breathing room for generated relations and caption bands.
+            padding = max(8, round(min(box.width, box.height) * 0.04))
+            renderable = renderable.model_copy(
+                update={
+                    "width": max(1, round(box.width) - 2 * padding),
+                    "height": max(1, round(box.height) - 2 * padding),
+                }
+            )
         asset_layer = Image.new("RGBA", layer.size, (0, 0, 0, 0))
-        renderer.render(asset_layer, renderable)
+        try:
+            rendered = renderer.render(asset_layer, renderable)
+        except Exception as exc:  # renderer backends expose heterogeneous errors
+            rendered = False
+            failure_reason = type(exc).__name__
+            logger.warning(
+                "Semantic asset {} failed to render: {}",
+                state.object_id,
+                exc,
+            )
+        else:
+            failure_reason = "renderer_returned_false"
+
+        if not rendered or asset_layer.getbbox() is None:
+            self._render_diagnostics.add(
+                f"semantic_asset_render_failed:{state.object_id}:{failure_reason}"
+            )
+            self._draw_asset_fallback(layer, state, box)
+            return
 
         # Generated semantic illustrations are compact compositions (often
         # three icons, arrows, and two captions), not single card icons.  In
@@ -1023,6 +1051,55 @@ class SemanticFrameRenderer:
         # caption band would create tiny black marks and a second, unrelated
         # label inside the card.  Offline icon assets retain their full box.
         layer.alpha_composite(asset_layer)
+
+    def _draw_asset_fallback(
+        self,
+        layer: Image.Image,
+        state: ObjectState,
+        box: LayoutBox,
+    ) -> None:
+        """Paint an unmistakable accessible fallback for a broken asset."""
+
+        draw = ImageDraw.Draw(layer)
+        bounds = self._coords(box)
+        inset = max(4, round(min(box.width, box.height) * 0.06))
+        fallback = (
+            bounds[0] + inset,
+            bounds[1] + inset,
+            bounds[2] - inset,
+            bounds[3] - inset,
+        )
+        draw.rounded_rectangle(
+            fallback,
+            radius=max(8, inset),
+            fill=(255, 247, 230, 255),
+            outline=(179, 38, 30, 255),
+            width=4,
+        )
+        draw.line(
+            (fallback[0] + 12, fallback[1] + 12,
+             fallback[2] - 12, fallback[3] - 12),
+            fill=(179, 38, 30, 255),
+            width=4,
+        )
+        draw.line(
+            (fallback[2] - 12, fallback[1] + 12,
+             fallback[0] + 12, fallback[3] - 12),
+            fill=(179, 38, 30, 255),
+            width=4,
+        )
+        label = str(
+            state.metadata.get("accessibility_label")
+            or state.content.get("label")
+            or "illustration unavailable"
+        )
+        self._draw_centered_text(
+            draw,
+            fallback,
+            label[:48],
+            max(self.MIN_FONT_SIZE, min(24, round(box.height * 0.10))),
+            (90, 25, 20, 255),
+        )
 
     def _apply_camera(
         self,

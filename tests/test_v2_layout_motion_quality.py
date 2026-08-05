@@ -3,12 +3,22 @@
 from pathlib import Path
 
 from app.camera import SemanticCameraPlanner
-from app.domain.assets import ResolvedAssetSet
+from app.domain.assets import (
+    AssetPresentation,
+    AssetSource,
+    ResolvedAssetSet,
+    ResolvedSemanticAsset,
+)
 from app.domain.layout import Viewport
 from app.domain.narration import AlignedAudio, PhraseTiming
 from app.domain.operations import OperationType, VisualOperation
 from app.domain.storyboard import ShotPlan, VisualObjectSpec
-from app.domain.visual_document import ObjectLifecycle
+from app.domain.visual_document import (
+    ObjectLifecycle,
+    ObjectState,
+    VisualDocument,
+    VisualState,
+)
 from app.layout import HierarchicalLayoutEngine
 from app.motion import SemanticAnimationPlanner
 from app.quality import DeterministicQualityEvaluator, VisualQualityEvaluator
@@ -178,6 +188,49 @@ def test_semantic_asset_diagnostic_fallback_creates_ready_svg(tmp_path: Path) ->
     assert result.assets[0].ready
     assert "placeholder" not in result.assets[0].path
     assert (generated_dir / f"{result.assets[0].query_digest}.svg").is_file()
+
+
+def test_generated_diagram_layout_reserves_aspect_correct_space() -> None:
+    """A composition receives diagram geometry rather than an icon-sized slot."""
+
+    document = VisualDocument(
+        document_id="diagram_document",
+        states=[VisualState(
+            state_id="diagram_state",
+            beat_id="diagram_beat",
+            object_states={
+                "unknown_art": ObjectState(
+                    object_id="unknown_art",
+                    kind="semantic_asset",
+                )
+            },
+        )],
+    )
+    assets = ResolvedAssetSet(assets=[ResolvedSemanticAsset(
+        asset_id="asset_unknown_art",
+        query_digest="diagram-digest",
+        source=AssetSource.GENERATED,
+        presentation=AssetPresentation.DIAGRAM,
+        path="generated.svg",
+        mime_type="image/svg+xml",
+        content_hash="diagram-hash",
+        editable=True,
+        ready=True,
+        intrinsic_width=800,
+        intrinsic_height=400,
+        aspect_ratio=2,
+    )])
+
+    layout = HierarchicalLayoutEngine().layout(
+        document,
+        assets,
+        Viewport(width=1280, height=720, margin=40),
+    )
+    diagram = layout.state_roots["diagram_state"].children[0]
+
+    assert diagram.box.width >= 500
+    assert diagram.box.height >= 250
+    assert abs(diagram.box.width / diagram.box.height - 2.0) < 0.01
 
 
 def test_coverage_finding_names_missing_concept_ids() -> None:

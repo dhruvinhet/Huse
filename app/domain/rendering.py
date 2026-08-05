@@ -36,6 +36,7 @@ class FrameSequence(BaseModel):
     total_frames: int = Field(gt=0)
     fps: int = Field(gt=0)
     sample_paths: list[NonEmptyString] = Field(default_factory=list)
+    diagnostics: list[NonEmptyString] = Field(default_factory=list)
 
 
 class CompositionJob(BaseModel):

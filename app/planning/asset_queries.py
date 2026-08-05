@@ -59,7 +59,10 @@ class SemanticAssetQueryPlanner:
                         semantic_role="concept_illustration",
                         concept_ids=[node.concept_id],
                         content={
-                            "asset_slot": "left",
+                            # Resolution decides whether this is a compact
+                            # catalog icon or a full generated diagram.  Do
+                            # not pre-classify unknown artwork as a card icon.
+                            "asset_placement": "auto",
                             "focal_weight": (
                                 0.9 if node.importance >= 0.75 else 0.6
                             ),

@@ -197,11 +197,11 @@ Acceptance criteria:
 Primary files: `app/planning/asset_queries.py`,
 `app/rendering/semantic_frames.py`, semantic asset generation/layout tests.
 
-- [ ] Stop classifying a composed mini-diagram as a small left-slot icon.
-- [ ] Give generated diagrams a dedicated object kind/placement contract, or
+- [x] Stop classifying a composed mini-diagram as a small left-slot icon.
+- [x] Give generated diagrams a dedicated object kind/placement contract, or
   produce a card-safe icon variant and a full-diagram variant explicitly.
-- [ ] Preserve intrinsic aspect ratio and reserve adequate layout space.
-- [ ] If a generated asset cannot be rendered, fall back visibly and report a
+- [x] Preserve intrinsic aspect ratio and reserve adequate layout space.
+- [x] If a generated asset cannot be rendered, fall back visibly and report a
   quality finding; never silently return from the draw path.
 
 Acceptance criteria:

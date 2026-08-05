@@ -6,7 +6,12 @@ from xml.etree import ElementTree
 from PIL import Image, ImageChops
 
 from app.config.settings import PROJECT_ROOT
-from app.domain.assets import AssetKind, AssetQuery, AssetSource
+from app.domain.assets import (
+    AssetKind,
+    AssetPresentation,
+    AssetQuery,
+    AssetSource,
+)
 from app.domain.storyboard import VisualObjectSpec
 from app.semantic_assets import (
     AssetCatalog,
@@ -290,6 +295,8 @@ def test_generated_composition_is_cached_by_query_digest(tmp_path: Path) -> None
     second = resolver.resolve(board).assets[0]
 
     assert first.source is AssetSource.GENERATED
+    assert first.presentation is AssetPresentation.DIAGRAM
+    assert first.aspect_ratio == 1.0
     assert first.license_id == "composed:Material-Symbols-Apache-2.0"
     assert second.content_hash == first.content_hash
     assert output.stat().st_mtime_ns == before

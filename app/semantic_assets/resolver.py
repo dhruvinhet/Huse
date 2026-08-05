@@ -8,6 +8,7 @@ from xml.etree import ElementTree
 from app.config.settings import PROJECT_ROOT, settings
 from app.domain.assets import (
     AssetKind,
+    AssetPresentation,
     AssetQuery,
     AssetSource,
     ResolvedAssetSet,
@@ -69,6 +70,7 @@ class CatalogSemanticAssetResolver:
                 asset_id=f"asset_{object_id}",
                 query_digest=digest,
                 source=AssetSource.TEMPLATE,
+                presentation=AssetPresentation.TEMPLATE,
                 path=f"template://{query.concept}",
                 mime_type="application/x-whiteboard-template",
                 license_id="internal-template",
@@ -87,6 +89,7 @@ class CatalogSemanticAssetResolver:
                 asset_id=f"asset_{object_id}",
                 query_digest=digest,
                 source=AssetSource.CATALOG,
+                presentation=AssetPresentation.ICON,
                 path=catalog_asset.path.as_posix(),
                 mime_type=catalog_asset.mime_type,
                 license_id=catalog_asset.license_id,
@@ -114,6 +117,7 @@ class CatalogSemanticAssetResolver:
             asset_id=f"asset_{object_id}",
             query_digest=digest,
             source=AssetSource.GENERATED,
+            presentation=AssetPresentation.DIAGRAM,
             path=configured_path.as_posix(),
             mime_type="image/svg+xml",
             license_id=license_id,

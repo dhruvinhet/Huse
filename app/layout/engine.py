@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from math import ceil, cos, pi, sin, sqrt
 
-from app.domain.assets import ResolvedAssetSet
+from app.domain.assets import AssetPresentation, ResolvedAssetSet
 from app.domain.layout import (
     LaidOutNode,
     LayoutBox,
@@ -261,7 +261,21 @@ class HierarchicalLayoutEngine:
             return 84.0, 80.0 + 260.0 * max(0.0, min(1.0, value))
         width, height = sizes.get(item.kind, (max(160.0, text_width), 96.0))
         asset = assets.for_object(item.object_id)
-        if asset is not None and asset.aspect_ratio is not None:
+        if (
+            item.kind == "semantic_asset"
+            and asset is not None
+            and asset.presentation is AssetPresentation.DIAGRAM
+        ):
+            # Generated compositions include multiple glyphs, relations, and
+            # a caption band.  Give them a diagram-sized, aspect-correct box
+            # instead of squeezing them into the compact icon footprint.
+            ratio = max(0.2, min(5.0, float(asset.aspect_ratio or 1.0)))
+            width = min(600.0, 400.0 * sqrt(ratio))
+            height = width / ratio
+            if height > 400.0:
+                height = 400.0
+                width = height * ratio
+        elif asset is not None and asset.aspect_ratio is not None:
             ratio = max(0.2, min(5.0, float(asset.aspect_ratio)))
             asset_width = max(48.0, min(132.0, 92.0 * sqrt(ratio)))
             asset_height = max(48.0, min(156.0, asset_width / ratio))

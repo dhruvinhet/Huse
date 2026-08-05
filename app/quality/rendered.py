@@ -48,6 +48,28 @@ class RenderedFrameQualityEvaluator:
 
         context = context or {}
         findings: list[QualityFinding] = []
+        for diagnostic in frames.diagnostics:
+            if not diagnostic.startswith("semantic_asset_render_failed:"):
+                continue
+            parts = diagnostic.split(":", maxsplit=2)
+            if len(parts) < 3 or not parts[1]:
+                continue
+            object_id = parts[1]
+            findings.append(QualityFinding(
+                code="semantic_asset_render_failed",
+                severity=FindingSeverity.ERROR,
+                artifact_id="rendered_frames",
+                message=(
+                    f"Semantic artwork for {object_id!r} could not be rendered; "
+                    "a visible diagnostic fallback was painted instead."
+                ),
+                repair_target="assets",
+                repair_scope="object",
+                object_ids=[object_id],
+                measured_value=0.0,
+                required_value=1.0,
+                patch_paths=["/assets"],
+            ))
         folder = Path(frames.folder)
         opening_limit = min(frames.total_frames, max(1, round(frames.fps * 2)))
         opening_numbers = list(range(1, opening_limit + 1, max(1, frames.fps // 4)))

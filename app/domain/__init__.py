@@ -2,6 +2,7 @@
 
 from app.domain.assets import (
     AssetKind,
+    AssetPresentation,
     AssetQuery,
     AssetSource,
     ResolvedAssetSet,
@@ -75,6 +76,7 @@ __all__ = [
     "AlignedAudio",
     "ArtifactEnvelope",
     "AssetKind",
+    "AssetPresentation",
     "AssetQuery",
     "AssetSource",
     "AttentionCue",

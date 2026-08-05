@@ -27,6 +27,14 @@ class AssetSource(str, Enum):
     LEGACY = "legacy"
 
 
+class AssetPresentation(str, Enum):
+    """Layout/rendering contract for a resolved asset's visual footprint."""
+
+    ICON = "icon"
+    DIAGRAM = "diagram"
+    TEMPLATE = "template"
+
+
 class AssetQuery(BaseModel):
     """Describe an asset semantically without naming a file."""
 
@@ -42,6 +50,7 @@ class ResolvedSemanticAsset(BaseModel):
     asset_id: NonEmptyString
     query_digest: NonEmptyString
     source: AssetSource
+    presentation: AssetPresentation = AssetPresentation.ICON
     path: NonEmptyString
     mime_type: NonEmptyString
     license_id: str | None = None

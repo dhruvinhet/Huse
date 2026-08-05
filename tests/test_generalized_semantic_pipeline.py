@@ -677,6 +677,8 @@ def test_peer_collection_cannot_be_compiled_as_a_false_pipeline() -> None:
     )
     queried = [item for item in created.flatten() if item.asset_query is not None]
     assert len(queried) == 4
+    assert all("asset_slot" not in item.content for item in queried)
+    assert all(item.content.get("asset_placement") == "auto" for item in queried)
     focused = [
         tuple(operation.target_ids)
         for beat in board.beats
