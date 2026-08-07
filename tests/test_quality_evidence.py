@@ -15,7 +15,12 @@ from app.domain.repair import RepairStage
 from app.domain.rendering import FrameSequence
 from app.domain.strategy import TemplateMatch
 from app.domain.storyboard import VisualBeat
-from app.domain.visual_document import ObjectState, VisualDocument, VisualState
+from app.domain.visual_document import (
+    ObjectLifecycle,
+    ObjectState,
+    VisualDocument,
+    VisualState,
+)
 from app.quality import (
     DeterministicQualityEvaluator,
     EducationalQualityEvaluator,
@@ -269,6 +274,18 @@ def test_visual_preflight_detects_crossing_relation_paths() -> None:
                     kind="connector",
                     content={"source_id": "c", "target_id": "d"},
                 ),
+                "hidden_edge_ab": ObjectState(
+                    object_id="hidden_edge_ab",
+                    kind="connector",
+                    lifecycle=ObjectLifecycle.HIDDEN,
+                    content={"source_id": "a", "target_id": "b"},
+                ),
+                "hidden_edge_cd": ObjectState(
+                    object_id="hidden_edge_cd",
+                    kind="connector",
+                    lifecycle=ObjectLifecycle.HIDDEN,
+                    content={"source_id": "c", "target_id": "d"},
+                ),
             },
         )],
     )
@@ -285,6 +302,54 @@ def test_visual_preflight_detects_crossing_relation_paths() -> None:
     )
     assert crossing.object_ids == ["edge_ab", "edge_cd"]
     assert crossing.measured_value == 1
+    assert crossing.severity is FindingSeverity.WARNING
+    assert report.decision is EvaluationDecision.PASS
+
+
+def test_readability_accepts_a_tall_wrapped_concept_card() -> None:
+    """A multi-line label can be readable below its one-line width."""
+
+    layout = LayoutPlan(
+        viewport=Viewport(width=1920, height=1080),
+        state_roots={
+            "state": LaidOutNode(
+                object_id="root",
+                kind="document",
+                box=LayoutBox(x=0, y=0, width=1920, height=1080),
+                children=[LaidOutNode(
+                    object_id="compressed",
+                    kind="component",
+                    box=LayoutBox(x=100, y=100, width=196, height=223),
+                )],
+            )
+        },
+    )
+    document = VisualDocument(
+        document_id="wrapped",
+        states=[VisualState(
+            state_id="state",
+            beat_id="beat",
+            object_states={
+                "compressed": ObjectState(
+                    object_id="compressed",
+                    kind="component",
+                    content={
+                        "label": "Compressed Representation",
+                        "detail": "The encoder's compact output.",
+                    },
+                )
+            },
+        )],
+    )
+
+    report = DeterministicQualityEvaluator().evaluate(
+        "layout",
+        layout,
+        {"layout": layout, "document": document},
+    )
+    assert "semantic_text_geometry_unreadable" not in {
+        finding.code for finding in report.findings
+    }
 
 
 def test_repair_planner_maps_owner_dependencies_and_patch_scope() -> None:

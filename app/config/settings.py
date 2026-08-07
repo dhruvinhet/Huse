@@ -24,6 +24,7 @@ class Settings(BaseModel):
     NVIDIA_VISION_MODEL: str
     NVIDIA_BASE_URL: str
     NVIDIA_MAX_TOKENS: int
+    NVIDIA_TIMEOUT_SECONDS: float
     OUTPUT_DIR: Path
     TEMP_DIR: Path
     LOG_LEVEL: str
@@ -53,6 +54,7 @@ settings = Settings(
         "NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"
     ).strip().rstrip("/"),
     NVIDIA_MAX_TOKENS=getenv("NVIDIA_MAX_TOKENS", "16384"),
+    NVIDIA_TIMEOUT_SECONDS=getenv("NVIDIA_TIMEOUT_SECONDS", "600"),
     OUTPUT_DIR=Path(getenv("OUTPUT_DIR", "outputs")),
     TEMP_DIR=Path(getenv("TEMP_DIR", "temp")),
     LOG_LEVEL=getenv("LOG_LEVEL", "INFO"),

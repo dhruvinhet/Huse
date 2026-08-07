@@ -62,9 +62,10 @@ class GeminiClient:
     _DEFAULT_PROVIDER = "gemini"
     _NVIDIA_PROVIDER_NAMES = {"nvidia", "nvidea"}
     # Provider outages are transient; three bounded attempts cover a brief
-    # 503/504 window without making a failed run wait indefinitely.
+    # transport or 5xx window without making one request wait indefinitely.
     _NVIDIA_REQUEST_ATTEMPTS = 3
     _NVIDIA_RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
+    _NVIDIA_DEFAULT_TIMEOUT_SECONDS = 600.0
 
     @property
     def PROVIDER(self) -> str:
@@ -241,13 +242,20 @@ class GeminiClient:
         }
 
         response_payload: object | None = None
+        timeout_seconds = float(
+            getattr(
+                settings,
+                "NVIDIA_TIMEOUT_SECONDS",
+                self._NVIDIA_DEFAULT_TIMEOUT_SECONDS,
+            )
+        )
         for attempt in range(1, self._NVIDIA_REQUEST_ATTEMPTS + 1):
             try:
                 response = httpx.post(
                     f"{base_url}/chat/completions",
                     headers=headers,
                     json=payload,
-                    timeout=None,
+                    timeout=timeout_seconds,
                 )
                 response.raise_for_status()
                 response_payload = response.json()
@@ -267,6 +275,18 @@ class GeminiClient:
                 logger.error("NVIDIA network request failed: {}", exc)
                 raise GeminiNetworkError(
                     "NVIDIA could not be reached due to a network failure."
+                ) from exc
+            except httpx.TransportError as exc:
+                # Protocol disconnects (for example, a server closing the
+                # connection before sending response headers) are transient
+                # transport failures, but are not httpx.NetworkError values.
+                if attempt < self._NVIDIA_REQUEST_ATTEMPTS:
+                    self._log_nvidia_retry(attempt, "transport failure")
+                    sleep(float(attempt))
+                    continue
+                logger.error("NVIDIA transport request failed: {}", exc)
+                raise GeminiNetworkError(
+                    "NVIDIA disconnected before completing the response."
                 ) from exc
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code

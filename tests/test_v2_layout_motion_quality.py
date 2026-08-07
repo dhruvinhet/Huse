@@ -12,7 +12,13 @@ from app.domain.assets import (
 from app.domain.layout import Viewport
 from app.domain.narration import AlignedAudio, PhraseTiming
 from app.domain.operations import OperationType, VisualOperation
-from app.domain.storyboard import CameraIntent, ShotPlan, VisualObjectSpec
+from app.domain.storyboard import (
+    CameraIntent,
+    ShotPlan,
+    Storyboard,
+    VisualBeat,
+    VisualObjectSpec,
+)
 from app.domain.visual_document import (
     ObjectLifecycle,
     ObjectState,
@@ -162,6 +168,70 @@ def test_tree_operator_overrides_generic_horizontal_layout_hint() -> None:
     }
     assert "semantic_text_geometry_unreadable" not in {
         finding.code for finding in compiled_report.findings
+    }
+
+
+def test_dense_funnel_wraps_nested_assets_into_readable_geometry() -> None:
+    """Many illustrated concepts must not collapse into a narrow rail."""
+
+    concepts = [
+        VisualObjectSpec(
+            object_id=f"concept_{index}",
+            kind="component",
+            semantic_role="concept",
+            concept_ids=[f"C{index}"],
+            content={
+                "label": "Compressed Representation" if index == 3 else f"Concept {index}",
+                "detail": "A complete explanation of this concept.",
+            },
+            children=[VisualObjectSpec(
+                object_id=f"concept_{index}_asset",
+                kind="semantic_asset",
+                semantic_role="concept_illustration",
+                concept_ids=[f"C{index}"],
+                accessibility_label=f"Illustration for concept {index}",
+            )],
+            accessibility_label=f"Concept {index}",
+        )
+        for index in range(1, 8)
+    ]
+    root = VisualObjectSpec(
+        object_id="funnel",
+        kind="funnel",
+        semantic_role="compiled_visual_intent",
+        content={"label": "Concept funnel", "operator": "funnel"},
+        children=concepts,
+        accessibility_label="Concept funnel",
+    )
+    base = storyboard()
+    beat = base.beats[0].model_copy(update={
+        "concept_ids": [f"C{index}" for index in range(1, 8)],
+        "operations": [VisualOperation(
+            operation_id="create_funnel",
+            operation=OperationType.CREATE,
+            target_ids=[root.object_id],
+            arguments={"objects": [root.model_dump(mode="json")]},
+        )],
+    })
+    board = base.model_copy(update={"beats": [beat]})
+    document = VisualStateTransitionEngine().materialize(board)
+    layout = HierarchicalLayoutEngine().layout(
+        document,
+        ResolvedAssetSet(),
+        Viewport(width=1920, height=1080),
+    )
+    visual = VisualQualityEvaluator().evaluate(
+        "layout", layout, {"layout": layout, "document": document}
+    )
+    deterministic = DeterministicQualityEvaluator().evaluate(
+        "layout", layout, {"layout": layout, "document": document}
+    )
+
+    assert "canvas_underused" not in {
+        finding.code for finding in visual.findings
+    }
+    assert "semantic_text_geometry_unreadable" not in {
+        finding.code for finding in deterministic.findings
     }
 
 
@@ -323,3 +393,70 @@ def test_shot_plan_cleans_history_and_camera_uses_source_geometry() -> None:
         findings,
     )
     assert "camera_change_too_small" in {item.code for item in findings}
+
+
+def test_summary_shot_keeps_all_required_concepts_visible() -> None:
+    """The summary budget must not hide a required concept object."""
+
+    root = VisualObjectSpec(
+        object_id="concept_map",
+        kind="group",
+        semantic_role="concept_map",
+        accessibility_label="Concept map",
+        children=[
+            VisualObjectSpec(
+                object_id=f"concept_{index}",
+                kind="component",
+                semantic_role="concept",
+                concept_ids=[f"C{index}"],
+                content={"importance": 0.5},
+                accessibility_label=f"Concept C{index}",
+            )
+            for index in range(1, 9)
+        ],
+    )
+    child_ids = [child.object_id for child in root.children]
+    board = Storyboard(
+        document_id="concept_map_document",
+        title="Concept map",
+        beats=[
+            VisualBeat(
+                beat_id="introduce",
+                section_id="section",
+                concept_ids=["C1"],
+                teaching_intent="Introduce the concept map.",
+                phrase_intent="Show the concept map.",
+                estimated_duration=2,
+                operations=[VisualOperation(
+                    operation_id="create_map",
+                    operation=OperationType.CREATE,
+                    target_ids=[root.object_id],
+                    arguments={"objects": [root.model_dump(mode="json")]},
+                )],
+            ),
+            VisualBeat(
+                beat_id="summary",
+                section_id="section",
+                concept_ids=[f"C{index}" for index in range(1, 9)],
+                teaching_intent="Summarize every concept.",
+                phrase_intent="Show every concept in the summary.",
+                purpose="summarize",
+                estimated_duration=2,
+                operations=[VisualOperation(
+                    operation_id="show_all",
+                    operation=OperationType.SHOW,
+                    target_ids=child_ids,
+                )],
+                shot_plan=ShotPlan.for_purpose("summarize"),
+            ),
+        ],
+    )
+
+    summary = VisualStateTransitionEngine().materialize(board).states[-1]
+    visible_concepts = {
+        concept_id
+        for state in summary.object_states.values()
+        if state.lifecycle is not ObjectLifecycle.HIDDEN
+        for concept_id in state.metadata.get("concept_ids", [])
+    }
+    assert visible_concepts >= {f"C{index}" for index in range(1, 9)}

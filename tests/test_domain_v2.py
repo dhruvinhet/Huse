@@ -219,6 +219,27 @@ def test_storyboard_allows_created_descendant_operations() -> None:
     assert model.beats[1].operations[0].target_ids == ["output_box"]
 
 
+def test_hiding_a_container_hides_its_descendants() -> None:
+    """A hidden hierarchy must not leave visible orphan child roots."""
+
+    board = storyboard()
+    hide = board.beats[1].model_copy(update={
+        "operations": [VisualOperation(
+            operation_id="hide_pipeline",
+            operation=OperationType.HIDE,
+            target_ids=["pipeline"],
+        )],
+    })
+    document = VisualStateTransitionEngine().materialize(
+        board.model_copy(update={"beats": [board.beats[0], hide]})
+    )
+    states = document.states[-1].object_states
+
+    assert states["pipeline"].lifecycle is ObjectLifecycle.HIDDEN
+    assert states["input_box"].lifecycle is ObjectLifecycle.HIDDEN
+    assert states["output_box"].lifecycle is ObjectLifecycle.HIDDEN
+
+
 def test_storyboard_drops_empty_model_generated_beats() -> None:
     """A prose-only beat does not block an otherwise valid storyboard."""
 

@@ -6,7 +6,21 @@ from loguru import logger
 
 from app.application.ports.knowledge import TemplateLibrary
 from app.domain.lesson import LessonPlan
-from app.domain.operations import OperationType, TraceAction, VisualOperation
+from app.domain.operations import (
+    CompareAction,
+    ConsumeAction,
+    GroupAction,
+    MergeAction,
+    OperationType,
+    ProduceAction,
+    RouteAction,
+    SemanticAction,
+    SplitAction,
+    TransferAction,
+    TransformAction,
+    VisualOperation,
+)
+from app.domain.generation import AudienceProfile
 from app.domain.pedagogy import PedagogyPlan
 from app.domain.semantic_bounds import (
     MAX_SEMANTIC_CONCEPTS,
@@ -29,6 +43,7 @@ from app.domain.strategy import (
 )
 from app.domain.visual_intent import RendererOperator
 from app.novelty import REVIEWED_LAYOUT_VARIANTS
+from app.planning.shot_graph import shot_concept_groups
 
 
 class TemplateCompiler:
@@ -92,9 +107,22 @@ class TemplateCompiler:
         library: TemplateLibrary,
         pedagogy: PedagogyPlan,
         target_duration: float = 60.0,
+        audience: AudienceProfile | None = None,
+        shot_local_matching: bool = False,
     ) -> CompiledTemplateProgram | None:
         """Return a deterministic program for the strongest match, if any."""
 
+        groups = shot_concept_groups(lesson, pedagogy)
+        local_matcher = getattr(library, "match_shots", None)
+        if shot_local_matching and callable(local_matcher):
+            local_matches = local_matcher(
+                lesson.concept_graph,
+                pedagogy,
+                groups,
+                audience,
+            )
+            if local_matches:
+                matches = local_matches
         section_selections = self._select_for_shots(
             lesson,
             strategies,
@@ -147,6 +175,7 @@ class TemplateCompiler:
             lesson,
             pedagogy,
             target_duration,
+            selection,
         )
         return CompiledTemplateProgram(
             template_id=selection.template_id,
@@ -180,14 +209,20 @@ class TemplateCompiler:
             for item in strategies
             if item.preferred_template is not None
         }
-        groups = self._shot_concept_groups(lesson, pedagogy)
+        groups = shot_concept_groups(lesson, pedagogy)
         selections: list[TemplateMatch] = []
         for shot, concepts in zip(pedagogy.shots, groups, strict=True):
             required = set(concepts)
             eligible = [
                 match
                 for match in matches
-                if shot.purpose in match.capabilities.pedagogy_roles
+                if (not match.shot_ids or shot.shot_id in match.shot_ids)
+                and shot.purpose in match.capabilities.pedagogy_roles
+                and (
+                    shot.purpose
+                    not in {"transform", "demonstrate", "connect", "compare"}
+                    or shot.purpose in match.capabilities.action_recipes
+                )
                 and min(len(required), MAX_SEMANTIC_CONCEPTS)
                 <= match.capabilities.maximum_operands
             ]
@@ -223,7 +258,7 @@ class TemplateCompiler:
     ) -> CompiledTemplateProgram:
         """Instantiate shot-owned reviewed roots and lower deterministic cleanup."""
 
-        groups = self._shot_concept_groups(lesson, pedagogy)
+        groups = shot_concept_groups(lesson, pedagogy)
         roots: list[VisualObjectSpec] = []
         section_parameters: list[dict[str, object]] = []
         combined_provenance: dict[str, ParameterProvenance] = {}
@@ -286,24 +321,32 @@ class TemplateCompiler:
                 operation=OperationType.HIGHLIGHT,
                 target_ids=list(dict.fromkeys(targets)),
             ))
+            semantic_actions = self._template_actions(
+                root,
+                shot.purpose,
+                shot.shot_id,
+                selections[index].capabilities,
+            )
             beats.append(VisualBeat(
                 beat_id=f"shot_{index + 1:02d}_{shot.shot_id}",
                 section_id=f"pedagogy_{pedagogy.mode.value}",
                 concept_ids=concept_ids,
                 teaching_intent=shot.visual_obligation,
-                phrase_intent=self._phrase_intent(
-                    shot.purpose,
-                    concept_ids,
-                    lesson,
-                    shot.narration_obligation,
-                    pedagogy.mode.value,
+                phrase_intent=self._bind_action_narration(
+                    self._phrase_intent(
+                        shot.purpose,
+                        concept_ids,
+                        lesson,
+                        shot.narration_obligation,
+                        pedagogy.mode.value,
+                    ),
+                    semantic_actions,
+                    root,
                 ),
                 purpose=shot.purpose,
                 estimated_duration=max(2.0, target_duration / len(pedagogy.shots)),
                 operations=operations,
-                semantic_actions=self._template_actions(
-                    root, shot.purpose, shot.shot_id
-                ),
+                semantic_actions=semantic_actions,
                 attention=[AttentionCue(
                     cue="focus",
                     target_ids=list(dict.fromkeys(targets)),
@@ -640,13 +683,14 @@ class TemplateCompiler:
         lesson: LessonPlan,
         pedagogy: PedagogyPlan,
         target_duration: float,
+        selection: TemplateMatch,
     ) -> Storyboard:
         """Compile shot boundaries and allowed transitions from the pedagogy plan."""
 
         sequence = list(lesson.concept_graph.teaching_sequence)
         nodes = {node.concept_id: node for node in lesson.concept_graph.nodes}
         shots = pedagogy.shots
-        groups = self._shot_concept_groups(lesson, pedagogy)
+        groups = shot_concept_groups(lesson, pedagogy)
 
         flattened = root.flatten()
         primary = [
@@ -716,18 +760,28 @@ class TemplateCompiler:
                         target_ids=targets,
                     )
                 )
+            semantic_actions = self._template_actions(
+                root,
+                shot.purpose,
+                shot.shot_id,
+                selection.capabilities,
+            )
             beats.append(
                 VisualBeat(
                     beat_id=f"shot_{index + 1:02d}_{shot.shot_id}",
                     section_id=f"pedagogy_{pedagogy.mode.value}",
                     concept_ids=concept_ids,
                     teaching_intent=shot.visual_obligation,
-                    phrase_intent=self._phrase_intent(
-                        shot.purpose,
-                        concept_ids,
-                        lesson,
-                        shot.narration_obligation,
-                        pedagogy.mode.value,
+                    phrase_intent=self._bind_action_narration(
+                        self._phrase_intent(
+                            shot.purpose,
+                            concept_ids,
+                            lesson,
+                            shot.narration_obligation,
+                            pedagogy.mode.value,
+                        ),
+                        semantic_actions,
+                        root,
                     ),
                     purpose=shot.purpose,
                     estimated_duration=max(
@@ -735,9 +789,7 @@ class TemplateCompiler:
                         target_duration / max(1, len(shots)),
                     ),
                     operations=operations,
-                    semantic_actions=self._template_actions(
-                        root, shot.purpose, shot.shot_id
-                    ),
+                    semantic_actions=semantic_actions,
                     attention=[
                         AttentionCue(
                             cue="focus",
@@ -764,99 +816,158 @@ class TemplateCompiler:
         )
 
     @staticmethod
+    def _bind_action_narration(
+        phrase: str,
+        actions: list[SemanticAction],
+        root: VisualObjectSpec,
+    ) -> str:
+        """State ordered route operands in the same order they animate."""
+
+        route = next((action for action in actions if action.action == "route"), None)
+        if route is None:
+            return phrase
+        labels = {
+            item.object_id: str(
+                item.content.get("label")
+                or item.content.get("value")
+                or item.accessibility_label
+            ).strip()
+            for item in root.flatten()
+        }
+        ordered_ids = [route.source_id, *route.path_ids, route.target_id]
+        ordered_labels = [labels[item] for item in ordered_ids if labels.get(item)]
+        if len(ordered_labels) < 2:
+            return phrase
+        return f"{phrase.rstrip()} Visit {', '.join(ordered_labels)} in that order."
+
+    @staticmethod
     def _template_actions(
         root: VisualObjectSpec,
         purpose: str,
         shot_id: str,
-    ) -> list[TraceAction]:
-        """Give transformation sections a supported typed state transition."""
+        capabilities: object,
+    ) -> list[SemanticAction]:
+        """Bind a reviewed non-trace action recipe to concrete local objects."""
 
         if purpose not in {"transform", "demonstrate", "connect", "compare"}:
             return []
+        recipes = getattr(capabilities, "action_recipes", {})
+        recipe = recipes.get(purpose) if isinstance(recipes, dict) else None
+        if not isinstance(recipe, str) or not recipe.strip():
+            raise ValueError(
+                f"template {root.object_id!r} has no typed action recipe for "
+                f"{purpose!r}"
+            )
+        supported = set(getattr(capabilities, "semantic_actions", []))
+        if recipe == "trace" or recipe not in supported:
+            raise ValueError(
+                f"template {root.object_id!r} action recipe {recipe!r} is "
+                "unsupported or trace-only"
+            )
         raw_operator = str(root.content.get("operator", "semantic_structure"))
+        if raw_operator == "semantic_structure":
+            raw_operator = str(root.content.get("source_operator", raw_operator))
         try:
             operator = RendererOperator(raw_operator)
         except ValueError:
             operator = RendererOperator.SEMANTIC_STRUCTURE
-        path_ids = [
-            item.object_id for item in root.flatten() if item.kind != "connector"
-        ][:6]
-        if len(path_ids) < 2:
-            return []
-        return [TraceAction(
-            action_id=f"{root.object_id}_{shot_id}_trace",
-            action="trace",
-            operator=operator,
-            operand_ids=path_ids,
-            path_ids=path_ids,
-            duration_hint=1.2,
-        )]
-
-    @staticmethod
-    def _shot_concept_groups(
-        lesson: LessonPlan,
-        pedagogy: PedagogyPlan,
-    ) -> list[list[str]]:
-        """Ground rhetorical shots in graph roles instead of arbitrary chunks."""
-
-        sequence = list(lesson.concept_graph.teaching_sequence)
-        parent_of = {
-            edge.source_id: edge.target_id
-            for edge in lesson.concept_graph.edges
-            if edge.relation.value == "part_of"
+        connectors = [item for item in root.flatten() if item.kind == "connector"]
+        objects = [
+            item for item in root.flatten()
+            if item.kind != "connector" and item.object_id != root.object_id
+        ]
+        if len(objects) < 2:
+            objects = [item for item in root.flatten() if item.kind != "connector"]
+        object_ids = [item.object_id for item in objects][:8]
+        if len(object_ids) < 2:
+            raise ValueError(
+                f"template {root.object_id!r} cannot bind {recipe!r}; "
+                "at least two visual operands are required"
+            )
+        action_id = f"{root.object_id}_{shot_id}_{recipe}"
+        common = {
+            "action_id": action_id,
+            "action": recipe,
+            "operator": operator,
+            "duration_hint": 1.2,
         }
-        whole_ids = [
-            concept_id
-            for concept_id in sequence
-            if concept_id not in parent_of
-            and concept_id in set(parent_of.values())
-        ]
-        component_ids = [
-            concept_id for concept_id in sequence if concept_id in parent_of
-        ]
-        relational_ids = list(dict.fromkeys(
-            concept_id
-            for edge in lesson.concept_graph.edges
-            for concept_id in (edge.source_id, edge.target_id)
-        ))
-        groups: list[list[str]] = []
-        content_shots = [
-            shot
-            for shot in pedagogy.shots
-            if shot.purpose not in {"introduce", "connect", "summarize"}
-        ]
-        content_index = {
-            shot.shot_id: index for index, shot in enumerate(content_shots)
-        }
-        for index, shot in enumerate(pedagogy.shots):
-            if shot.purpose == "summarize":
-                groups.append(sequence)
-            elif shot.purpose == "introduce":
-                groups.append(
-                    sequence
-                    if pedagogy.mode.value in {
-                        "concept_overview", "concept_set"
-                    }
-                    else whole_ids or sequence[:1]
-                )
-            elif shot.purpose == "connect":
-                groups.append(relational_ids or sequence)
-            elif pedagogy.mode.value == "mechanism_first":
-                groups.append(sequence[1:] or sequence)
-            elif component_ids:
-                groups.append(component_ids)
-            else:
-                width = max(
-                    1,
-                    (len(sequence) + max(1, len(content_shots)) - 1)
-                    // max(1, len(content_shots)),
-                )
-                start = min(
-                    content_index.get(shot.shot_id, index) * width,
-                    len(sequence) - 1,
-                )
-                groups.append(sequence[start:start + width] or [sequence[start]])
-        return groups
+        source_id, target_id = object_ids[0], object_ids[-1]
+        if connectors and recipe in {"transfer", "consume", "produce"}:
+            source_id = str(connectors[0].content.get("source_id", source_id))
+            target_id = str(connectors[-1].content.get("target_id", target_id))
+        if recipe == "route":
+            path = object_ids
+            return [RouteAction(
+                **common,
+                operand_ids=path,
+                source_id=path[0],
+                target_id=path[-1],
+                path_ids=path[1:-1],
+            )]
+        if recipe == "transfer":
+            payload_id = object_ids[1] if len(object_ids) > 2 else source_id
+            return [TransferAction(
+                **common,
+                operand_ids=list(dict.fromkeys([source_id, target_id, payload_id])),
+                source_id=source_id,
+                target_id=target_id,
+                payload_ids=[payload_id],
+            )]
+        if recipe == "split":
+            output_ids = object_ids[1:3]
+            if len(output_ids) < 2:
+                raise ValueError("split action recipes require two visible outputs")
+            return [SplitAction(
+                **common,
+                operand_ids=[object_ids[0], *output_ids],
+                source_id=object_ids[0],
+                output_ids=output_ids,
+            )]
+        if recipe == "merge":
+            input_ids = object_ids[:2]
+            return [MergeAction(
+                **common,
+                operand_ids=list(dict.fromkeys([*input_ids, target_id])),
+                input_ids=input_ids,
+                target_id=target_id,
+            )]
+        if recipe == "group":
+            members = object_ids[:6]
+            return [GroupAction(
+                **common,
+                operand_ids=list(dict.fromkeys([root.object_id, *members])),
+                member_ids=members,
+                group_id=root.object_id,
+            )]
+        if recipe == "compare":
+            return [CompareAction(
+                **common,
+                operand_ids=[object_ids[0], object_ids[1]],
+                left_id=object_ids[0],
+                right_id=object_ids[1],
+            )]
+        if recipe == "consume":
+            return [ConsumeAction(
+                **common,
+                operand_ids=[target_id, source_id],
+                consumer_id=target_id,
+                item_ids=[source_id],
+            )]
+        if recipe == "produce":
+            return [ProduceAction(
+                **common,
+                operand_ids=[source_id, target_id],
+                producer_id=source_id,
+                item_ids=[target_id],
+            )]
+        if recipe == "transform":
+            return [TransformAction(
+                **common,
+                operand_ids=[source_id, target_id],
+                source_id=source_id,
+                target_id=target_id,
+            )]
+        raise ValueError(f"typed action recipe {recipe!r} has no compiler binding")
 
     @staticmethod
     def _phrase_intent(

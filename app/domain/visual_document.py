@@ -32,6 +32,17 @@ class ObjectState(BaseModel):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
+class SemanticStateTransition(BaseModel):
+    """Preserve one explicit before/action/after semantic transition triple."""
+
+    action_id: NonEmptyString
+    action: NonEmptyString
+    operator: NonEmptyString
+    operand_ids: list[NonEmptyString] = Field(min_length=1)
+    previous_object_states: dict[NonEmptyString, ObjectState]
+    next_object_states: dict[NonEmptyString, ObjectState]
+
+
 class VisualState(BaseModel):
     """Represent an immutable checkpoint after applying one visual beat."""
 
@@ -39,6 +50,7 @@ class VisualState(BaseModel):
     beat_id: NonEmptyString
     parent_state_id: str | None = None
     object_states: dict[NonEmptyString, ObjectState]
+    transitions: list[SemanticStateTransition] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_hierarchy(self) -> Self:

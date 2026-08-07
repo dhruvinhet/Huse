@@ -9,6 +9,7 @@ from app.domain.lesson import (
     LessonPlan,
 )
 from app.domain.operations import OperationType
+from app.domain.operations import TraceAction
 from app.domain.storyboard import VisualObjectSpec
 from app.domain.strategy import TemplateCapabilities, TemplateMatch
 from app.domain.visual_document import ObjectLifecycle
@@ -402,3 +403,36 @@ def test_compiler_bounds_oversized_semantic_graph_before_validation() -> None:
         and relation["target_id"] in selected_ids
         for relation in program.parameters["relations"]
     )
+
+
+def test_transformation_beats_use_reviewed_non_trace_action_recipes() -> None:
+    """Matched templates must bind typed actions instead of generic traces."""
+
+    lesson = _binary_search_lesson()
+    route = PedagogyRouter().route(
+        lesson,
+        AudienceProfile(learning_goal="Run binary search"),
+    )
+    registry = TemplateRegistry(builtin_templates())
+    program = TemplateCompiler().compile(
+        lesson,
+        [],
+        registry.match(lesson.concept_graph),
+        registry,
+        route,
+    )
+
+    assert program is not None
+    transformation_beats = [
+        beat
+        for beat in program.storyboard.beats
+        if beat.purpose in {"transform", "demonstrate", "connect", "compare"}
+    ]
+    assert transformation_beats
+    assert all(beat.semantic_actions for beat in transformation_beats)
+    assert all(
+        not isinstance(action, TraceAction)
+        for beat in transformation_beats
+        for action in beat.semantic_actions
+    )
+    VisualStateTransitionEngine().materialize(program.storyboard)

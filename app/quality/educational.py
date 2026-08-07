@@ -74,6 +74,12 @@ class EducationalQualityEvaluator:
             artifact_id,
             findings,
         )
+        topic_contracts = self._topic_visual_contracts(
+            storyboard,
+            graph,
+            artifact_id,
+            findings,
+        )
         scores = {
             "teaching_progression": progression,
             "worked_examples": examples,
@@ -83,6 +89,7 @@ class EducationalQualityEvaluator:
             "visual_progression": visual_progression,
             "graph_sufficiency": graph_sufficiency,
             "visual_obligation_support": obligation_support,
+            "topic_visual_contracts": topic_contracts,
         }
         decision = (
             EvaluationDecision.REPAIR
@@ -95,6 +102,125 @@ class EducationalQualityEvaluator:
             findings=findings,
             decision=decision,
         )
+
+    @staticmethod
+    def _topic_visual_contracts(
+        storyboard: Storyboard,
+        graph: object,
+        artifact_id: str,
+        findings: list[QualityFinding],
+    ) -> float:
+        """Reject card-only output for topics with mandatory topology."""
+
+        if not isinstance(graph, ConceptGraph):
+            return 1.0
+        topic = " ".join([
+            *graph.objectives,
+            *(node.label for node in graph.nodes),
+            *(term for node in graph.nodes for term in node.visual_affordances),
+        ]).casefold().replace("-", " ")
+        if "binary tree" not in topic and "binary trees" not in topic:
+            return 1.0
+
+        roots: list[VisualObjectSpec] = []
+        for beat in storyboard.beats:
+            for operation in beat.operations:
+                if operation.operation is not OperationType.CREATE:
+                    continue
+                raw = operation.arguments.get("objects", [])
+                if isinstance(raw, list):
+                    roots.extend(
+                        VisualObjectSpec.model_validate(item)
+                        for item in raw
+                        if isinstance(item, dict)
+                    )
+
+        valid_tree: VisualObjectSpec | None = None
+        for root in roots:
+            flattened = root.flatten()
+            nodes = [item for item in flattened if item.kind == "tree_node"]
+            node_ids = {item.object_id for item in nodes}
+            edges = [
+                (
+                    str(item.content.get("source_id", "")),
+                    str(item.content.get("target_id", "")),
+                )
+                for item in flattened
+                if item.kind == "connector"
+                and item.content.get("source_id") in node_ids
+                and item.content.get("target_id") in node_ids
+            ]
+            outgoing = {
+                node_id: [target for source, target in edges if source == node_id]
+                for node_id in node_ids
+            }
+            incoming = {target for _source, target in edges}
+            roots_ids = node_ids - incoming
+            visited: set[str] = set()
+            pending = list(roots_ids)
+            while pending:
+                node_id = pending.pop()
+                if node_id in visited:
+                    continue
+                visited.add(node_id)
+                pending.extend(outgoing.get(node_id, []))
+            if (
+                len(nodes) >= 3
+                and len(roots_ids) == 1
+                and visited == node_ids
+                and len(edges) >= len(nodes) - 1
+                and all(len(children) <= 2 for children in outgoing.values())
+            ):
+                valid_tree = root
+                break
+        if valid_tree is None:
+            findings.append(QualityFinding(
+                code="binary_tree_topology_missing",
+                severity=FindingSeverity.ERROR,
+                artifact_id=artifact_id,
+                message=(
+                    "A binary-tree lesson requires a connected root/child "
+                    "topology with no more than two children per node."
+                ),
+                repair_target="storyboard",
+            ))
+            return 0.0
+
+        objects = {item.object_id: item for item in valid_tree.flatten()}
+        traversal_ok = False
+        for beat in storyboard.beats:
+            for action in beat.semantic_actions:
+                if action.action != "route":
+                    continue
+                ordered_ids = [action.source_id, *action.path_ids, action.target_id]
+                if len(ordered_ids) < 3 or not set(ordered_ids).issubset(objects):
+                    continue
+                labels = [
+                    str(objects[item].content.get("label", "")).strip().casefold()
+                    for item in ordered_ids
+                ]
+                positions = [beat.phrase_intent.casefold().find(label) for label in labels]
+                traversal_ok = (
+                    all(label and position >= 0 for label, position in zip(labels, positions))
+                    and positions == sorted(positions)
+                )
+                if traversal_ok:
+                    break
+            if traversal_ok:
+                break
+        if not traversal_ok:
+            findings.append(QualityFinding(
+                code="binary_tree_traversal_missing",
+                severity=FindingSeverity.ERROR,
+                artifact_id=artifact_id,
+                message=(
+                    "A binary-tree lesson requires an ordered route action "
+                    "whose visit order is stated by the narration."
+                ),
+                repair_target="storyboard",
+            ))
+            return 0.45
+        return 1.0
 
     @staticmethod
     def _semantic_fidelity(

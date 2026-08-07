@@ -34,8 +34,8 @@ _COMPARISON_ACTIONS = frozenset({
     "compare", "substitute", "transform", "trace",
 })
 _COMPUTATION_ACTIONS = frozenset({
-    "split", "merge", "compare", "substitute", "accumulate", "trace",
-    "transform",
+    "transfer", "route", "split", "merge", "compare", "consume",
+    "produce", "substitute", "accumulate", "trace", "transform",
 })
 _GENERIC_ACTIONS = frozenset({"group", "compare", "transform", "trace"})
 
@@ -127,12 +127,9 @@ class SemanticActionCompiler:
                 f"semantic action {action.action_id!r} references unknown "
                 f"operands: {unknown}"
             )
-        collisions = sorted(new_ids.intersection(states))
-        if collisions:
-            raise ValueError(f"split outputs already exist: {collisions}")
         if len(new_ids) != len(getattr(action, "output_ids", [])):
             raise ValueError("split output IDs must be unique")
-        return self._lower_valid(action)
+        return self._lower_valid(action, states)
 
     @staticmethod
     def reverse(action: SemanticAction) -> SemanticAction:
@@ -198,7 +195,11 @@ class SemanticActionCompiler:
             reversible=action.reversible,
         )
 
-    def _lower_valid(self, action: SemanticAction) -> list[VisualOperation]:
+    def _lower_valid(
+        self,
+        action: SemanticAction,
+        states: dict[str, ObjectState],
+    ) -> list[VisualOperation]:
         marker = {
             "semantic_action": action.action,
             "action_id": action.action_id,
@@ -217,10 +218,25 @@ class SemanticActionCompiler:
                 {"content": {**marker, "route": route}},
             )]
         if action.action == "split":
-            return [self._operation(
-                action, "split", OperationType.DUPLICATE, action.output_ids,
-                {"source_id": action.source_id, **marker},
-            )]
+            existing = [item for item in action.output_ids if item in states]
+            created = [item for item in action.output_ids if item not in states]
+            result: list[VisualOperation] = []
+            if created:
+                result.append(self._operation(
+                    action, "split", OperationType.DUPLICATE, created,
+                    {"source_id": action.source_id, **marker},
+                ))
+            if existing:
+                result.extend([
+                    self._operation(
+                        action, "split_state", OperationType.UPDATE, existing,
+                        {"content": {**marker, "split_from": action.source_id}},
+                    ),
+                    self._operation(
+                        action, "show_outputs", OperationType.SHOW, existing,
+                    ),
+                ])
+            return result
         if action.action == "merge":
             hidden = [item for item in action.input_ids if item != action.target_id]
             result = [self._operation(
@@ -272,10 +288,19 @@ class SemanticActionCompiler:
                 ),
             ]
         if action.action == "transform":
-            return [self._operation(
-                action, "transform", OperationType.MORPH, [action.source_id],
-                {"content": {**marker, "transformed_to": action.target_id}},
-            )]
+            return [
+                self._operation(
+                    action, "transform_state", OperationType.UPDATE,
+                    [action.target_id],
+                    {"content": {**marker, "transformed_from": action.source_id}},
+                ),
+                self._operation(
+                    action, "hide_source", OperationType.HIDE, [action.source_id],
+                ),
+                self._operation(
+                    action, "show_target", OperationType.SHOW, [action.target_id],
+                ),
+            ]
         if action.action == "substitute":
             return [
                 self._operation(

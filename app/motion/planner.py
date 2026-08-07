@@ -130,17 +130,17 @@ class SemanticAnimationPlanner:
 
     _ACTION_STRATEGIES = {
         "transfer": "semantic_transfer",
-        "route": "route_trace",
-        "split": "split_reveal",
-        "merge": "funnel_collapse",
-        "group": "group_focus",
-        "compare": "split_reveal",
-        "consume": "fade_out",
-        "produce": "fade_in",
-        "transform": "morph",
-        "substitute": "morph",
-        "accumulate": "grow_distribution",
-        "trace": "trace_steps",
+        "route": "semantic_route",
+        "split": "semantic_split",
+        "merge": "semantic_merge",
+        "group": "semantic_group",
+        "compare": "semantic_compare",
+        "consume": "semantic_consume",
+        "produce": "semantic_produce",
+        "transform": "semantic_transform",
+        "substitute": "semantic_transform",
+        "accumulate": "semantic_accumulate",
+        "trace": "semantic_trace",
     }
 
     def plan(
@@ -273,6 +273,10 @@ class SemanticAnimationPlanner:
                     for object_id in path_ids
                     if object_id in box_index
                 ]
+                trajectories = self._action_trajectories(action, box_index)
+                geometry_transitions = self._action_geometry_transitions(
+                    action, box_index
+                )
                 available = max(1e-6, end - action_start)
                 slot = max(1e-6, action_end - action_start)
                 duration = min(
@@ -291,10 +295,13 @@ class SemanticAnimationPlanner:
                     parameters={
                         "operation_type": "semantic_action",
                         "semantic_action": action.action,
+                        "action_id": action.action_id,
                         "operator": action.operator.value,
                         "direction": action.direction,
                         "relation": action.relation.value if action.relation else None,
                         "trajectory": path,
+                        "trajectories": trajectories,
+                        "geometry_transitions": geometry_transitions,
                         "state_delta": {
                             "operands": action.operand_ids,
                             "preconditions": len(action.preconditions),
@@ -308,14 +315,29 @@ class SemanticAnimationPlanner:
     def _action_object_ids(action: object) -> list[str]:
         """Choose objects whose pixels visibly express the action delta."""
 
-        for field in ("payload_ids", "item_ids", "path_ids", "member_ids"):
+        action_name = getattr(action, "action", "")
+        fields = {
+            "transfer": ("payload_ids",),
+            "route": ("operand_ids",),
+            "split": ("source_id", "output_ids"),
+            "merge": ("input_ids", "target_id"),
+            "group": ("member_ids", "group_id"),
+            "compare": ("left_id", "right_id"),
+            "consume": ("item_ids", "consumer_id"),
+            "produce": ("item_ids", "producer_id"),
+            "transform": ("source_id", "target_id"),
+            "substitute": ("source_id", "replacement_id"),
+            "accumulate": ("item_ids", "accumulator_id"),
+            "trace": ("path_ids",),
+        }.get(action_name, ("operand_ids",))
+        result: list[str] = []
+        for field in fields:
             value = getattr(action, field, None)
-            if isinstance(value, list) and value:
-                return list(value)
-        source = getattr(action, "source_id", None)
-        if isinstance(source, str):
-            return [source]
-        return list(getattr(action, "operand_ids"))
+            if isinstance(value, list):
+                result.extend(value)
+            elif isinstance(value, str):
+                result.append(value)
+        return list(dict.fromkeys(result or list(getattr(action, "operand_ids"))))
 
     @staticmethod
     def _action_path_ids(action: object) -> list[str]:
@@ -330,6 +352,85 @@ class SemanticAnimationPlanner:
         if isinstance(declared, list):
             return declared
         return list(getattr(action, "operand_ids"))
+
+    @staticmethod
+    def _action_trajectories(
+        action: object,
+        boxes: dict[str, LayoutBox],
+    ) -> dict[str, list[list[float]]]:
+        """Derive explicit per-object paths for every moving action family."""
+
+        def center(object_id: str) -> list[float] | None:
+            box = boxes.get(object_id)
+            if box is None:
+                return None
+            return [box.x + box.width / 2, box.y + box.height / 2]
+
+        def path(*object_ids: str) -> list[list[float]]:
+            return [point for item in object_ids if (point := center(item)) is not None]
+
+        name = getattr(action, "action", "")
+        trajectories: dict[str, list[list[float]]] = {}
+        if name == "transfer":
+            route = path(action.source_id, action.target_id)
+            trajectories.update({item: route for item in action.payload_ids})
+        elif name in {"route", "trace"}:
+            ids = SemanticAnimationPlanner._action_path_ids(action)
+            route = path(*ids)
+            if route:
+                trajectories["__route__"] = route
+        elif name == "split":
+            for item in action.output_ids:
+                trajectories[item] = path(action.source_id, item)
+        elif name == "merge":
+            for item in action.input_ids:
+                trajectories[item] = path(item, action.target_id)
+        elif name == "consume":
+            for item in action.item_ids:
+                trajectories[item] = path(item, action.consumer_id)
+        elif name == "produce":
+            for item in action.item_ids:
+                trajectories[item] = path(action.producer_id, item)
+        elif name == "transform":
+            trajectories[action.source_id] = path(action.source_id, action.target_id)
+        elif name == "substitute":
+            trajectories[action.source_id] = path(
+                action.source_id, action.replacement_id
+            )
+        elif name == "group":
+            for item in action.member_ids:
+                trajectories[item] = path(item, action.group_id)
+        elif name == "accumulate":
+            for item in action.item_ids:
+                trajectories[item] = path(item, action.accumulator_id)
+        return trajectories
+
+    @staticmethod
+    def _action_geometry_transitions(
+        action: object,
+        boxes: dict[str, LayoutBox],
+    ) -> dict[str, dict[str, list[float]]]:
+        """Declare before/after boxes for kind-changing semantic actions."""
+
+        name = getattr(action, "action", "")
+        if name == "transform":
+            source_id = action.source_id
+            target_id = action.target_id
+        elif name == "substitute":
+            source_id = action.source_id
+            target_id = action.replacement_id
+        else:
+            return {}
+        source = boxes.get(source_id)
+        target = boxes.get(target_id)
+        if source is None or target is None:
+            return {}
+        return {
+            source_id: {
+                "start": [source.x, source.y, source.width, source.height],
+                "end": [target.x, target.y, target.width, target.height],
+            }
+        }
 
     def repair(
         self,

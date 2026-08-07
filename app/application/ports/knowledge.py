@@ -6,6 +6,7 @@ from app.domain.generation import AudienceProfile
 from app.domain.lesson import ConceptGraph
 from app.domain.storyboard import VisualObjectSpec
 from app.domain.strategy import TemplateMatch, VisualStrategy
+from app.domain.pedagogy import PedagogyPlan
 
 
 class VisualKnowledgeBase(Protocol):
@@ -35,3 +36,12 @@ class TemplateLibrary(Protocol):
         parameters: dict[str, object],
     ) -> VisualObjectSpec:
         """Instantiate a semantic hierarchy without coordinates."""
+
+    def match_shots(
+        self,
+        graph: ConceptGraph,
+        pedagogy: PedagogyPlan,
+        concept_groups: list[list[str]],
+        audience: AudienceProfile | None = None,
+    ) -> list[TemplateMatch]:
+        """Return matches evaluated against shot-local query graphs."""

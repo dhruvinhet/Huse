@@ -9,8 +9,48 @@ from app.domain.layout import ConstraintStrength, ConstraintType, LayoutConstrai
 from app.domain.lesson import ConceptRelation
 from app.domain.semantic_bounds import bound_semantic_operands
 from app.domain.storyboard import VisualObjectSpec
+from app.domain.strategy import TemplateCapabilities
 from app.domain.visual_intent import RendererOperator
 from app.models.base import BaseModel, NonEmptyString
+from app.state.actions import OPERATOR_STATE_MODELS
+
+
+def reviewed_operator_capabilities(
+    operator: RendererOperator,
+) -> TemplateCapabilities:
+    """Declare reviewed non-trace recipes for one renderer operator."""
+
+    actions = set(OPERATOR_STATE_MODELS[operator].supported_actions)
+
+    def choose(*candidates: str) -> str | None:
+        return next((item for item in candidates if item in actions), None)
+
+    recipes = {
+        "demonstrate": choose(
+            "route", "transfer", "split", "compare", "transform", "group"
+        ),
+        "transform": choose(
+            "transform", "transfer", "split", "merge", "produce", "consume"
+        ),
+        "connect": choose("route", "transfer", "group", "merge"),
+        "compare": choose("compare", "substitute", "transform"),
+    }
+    roles = [
+        "introduce", "demonstrate", "transform", "connect", "emphasize",
+        "summarize",
+    ]
+    if recipes.get("compare"):
+        roles.append("compare")
+    return TemplateCapabilities(
+        relation_types=[],
+        semantic_actions=sorted(actions),
+        pedagogy_roles=roles,
+        action_recipes={
+            purpose: action
+            for purpose, action in recipes.items()
+            if action is not None
+        },
+    )
 
 
 class SemanticConceptParameter(BaseModel):
@@ -230,6 +270,7 @@ class OperatorTemplate:
     default_label: str
     metadata: tuple[str, ...]
     parameter_model: type[OperatorParameters] = GenericOperatorParameters
+    capabilities: TemplateCapabilities | None = None
 
     @property
     def diagram_kind(self) -> str:
@@ -864,6 +905,17 @@ class SemanticOperatorCompiler:
             self._leaf(parameters.object_id, "tree_node", index, label, "index_node", {"parent_index": parameters.parents[index] if index < len(parameters.parents) else None, "on_lookup_path": index in parameters.lookup_path})
             for index, label in enumerate(parameters.nodes)
         ]
+        children.extend(
+            self._connector(
+                parameters.object_id,
+                index - 1,
+                parent,
+                index,
+                "parent_child_edge",
+            )
+            for index, parent in enumerate(parameters.parents)
+            if index > 0 and parent is not None and parent < len(parameters.nodes)
+        )
         return self._container(parameters, "tree", children, "tree", {"operator": "tree_index", "lookup_path": parameters.lookup_path})
 
     def _compile_scheduling(self, raw: OperatorParameters) -> VisualObjectSpec:
@@ -1127,4 +1179,5 @@ def operator_template(
         default_label=label,
         metadata=metadata,
         parameter_model=PARAMETER_MODELS.get(operator, GenericOperatorParameters),
+        capabilities=reviewed_operator_capabilities(operator),
     )

@@ -44,6 +44,14 @@ class TemplateCapabilities(BaseModel):
     ])
     layout_constraints: list[NonEmptyString] = Field(default_factory=list)
     required_parameters: list[NonEmptyString] = Field(default_factory=list)
+    action_recipes: dict[NonEmptyString, NonEmptyString] = Field(
+        default_factory=lambda: {
+            "demonstrate": "route",
+            "transform": "transform",
+            "connect": "route",
+            "compare": "compare",
+        }
+    )
 
 
 class ParameterProvenance(BaseModel):
@@ -75,6 +83,7 @@ class TemplateMatch(BaseModel):
     layout_variant: Literal["canonical", "horizontal", "vertical", "grid"] = (
         "canonical"
     )
+    shot_ids: list[NonEmptyString] = Field(default_factory=list)
 
 
 class CompiledTemplateProgram(BaseModel):

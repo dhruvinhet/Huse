@@ -289,7 +289,7 @@ def test_nvidia_provider_uses_chat_completions(
             "max_tokens": 2048,
             "stream": False,
         },
-        timeout=None,
+        timeout=600.0,
     )
     response.raise_for_status.assert_called_once_with()
 
@@ -375,3 +375,40 @@ def test_nvidia_retries_one_transient_gateway_error(
 
     assert result == "recovered"
     assert post.call_count == 2
+
+
+def test_nvidia_retries_remote_protocol_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A server-side disconnect is retried instead of aborting the pipeline."""
+
+    test_settings = SimpleNamespace(
+        AI_PROVIDER="nvidia",
+        NVIDIA_API_KEY="nvidia-test-key",
+        NVIDIA_MODEL="test/model",
+        NVIDIA_BASE_URL="https://example.test/v1",
+        NVIDIA_MAX_TOKENS=4096,
+        NVIDIA_TIMEOUT_SECONDS=45,
+    )
+    request = httpx.Request(
+        "POST",
+        "https://example.test/v1/chat/completions",
+    )
+    disconnect = httpx.RemoteProtocolError(
+        "Server disconnected without sending a response.",
+        request=request,
+    )
+    successful = MagicMock()
+    successful.json.return_value = {
+        "choices": [{"message": {"content": "recovered"}}]
+    }
+    post = MagicMock(side_effect=[disconnect, successful])
+    monkeypatch.setattr(gemini_client, "settings", test_settings)
+    monkeypatch.setattr(gemini_client.httpx, "post", post)
+    monkeypatch.setattr(gemini_client, "sleep", MagicMock())
+
+    result = GeminiClient().generate_text("Test prompt")
+
+    assert result == "recovered"
+    assert post.call_count == 2
+    assert post.call_args.kwargs["timeout"] == 45.0

@@ -398,11 +398,17 @@ class DeterministicQualityEvaluator:
                     28.0 + min(36, len(label)) * 8.0,
                 ),
             )
-            minimum_width = max(
-                180.0 if has_detail else 0.0,
-                label_width,
-            ) * output_scale
             minimum_height = (110.0 if has_detail else 36.0) * output_scale
+            # Labels are rendered with wrapping. A tall card can therefore
+            # remain readable below the one-line width estimate; requiring
+            # every label to fit on one line incorrectly rejected otherwise
+            # spacious concept cards.
+            wrap_threshold = (180.0 if has_detail else 72.0) * output_scale
+            wrap_lines = 2 if node.box.height >= wrap_threshold else 1
+            minimum_width = max(
+                (180.0 if has_detail else 0.0) * output_scale,
+                label_width * output_scale / wrap_lines,
+            )
             if (
                 node.box.width < minimum_width
                 or node.box.height < minimum_height

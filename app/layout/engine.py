@@ -73,7 +73,19 @@ class HierarchicalLayoutEngine:
             for object_id, item in state.object_states.items()
             if item.lifecycle
             not in {ObjectLifecycle.REMOVED, ObjectLifecycle.HIDDEN}
+            or item.metadata.get("transition_reserved") is True
         }
+        # Keep pre-action source geometry in the layout until its transition
+        # completes. The renderer uses these boxes as ghosts for merge,
+        # consume, transform, and other destructive semantic actions.
+        for transition in state.transitions:
+            for object_id, item in transition.previous_object_states.items():
+                if item.lifecycle in {
+                    ObjectLifecycle.REMOVED,
+                    ObjectLifecycle.HIDDEN,
+                }:
+                    continue
+                visible_states.setdefault(object_id, item)
         root_states = [
             item
             for item in visible_states.values()
@@ -195,9 +207,12 @@ class HierarchicalLayoutEngine:
             "pipeline",
             "probability_distribution",
         }:
-            width, height = self._layout_linear(
-                content_children, horizontal=True, gap=gap
-            )
+            if len(content_children) > 5:
+                width, height = self._layout_grid(content_children, gap)
+            else:
+                width, height = self._layout_linear(
+                    content_children, horizontal=True, gap=gap
+                )
         else:
             width, height = self._layout_linear(
                 content_children, horizontal=False, gap=gap
@@ -212,11 +227,15 @@ class HierarchicalLayoutEngine:
         for child in children:
             child.x += self.CONTAINER_PADDING
             child.y += self.CONTAINER_PADDING + self.TITLE_HEIGHT
+        own_width, own_height = self._intrinsic_size(item, assets)
         return _MeasuredNode(
             item.object_id,
             item.kind,
-            max(width, 240.0),
-            max(height, 160.0),
+            # Containers paint their own label/detail in addition to their
+            # children. Reserve that intrinsic text footprint so a compact
+            # nested illustration cannot dictate an unreadably narrow card.
+            max(width, own_width, 240.0),
+            max(height, own_height, 160.0),
             operator=str(item.content.get("operator", "")),
             children=children,
         )
@@ -242,8 +261,14 @@ class HierarchicalLayoutEngine:
             "label": (text_width, 56.0),
             "text": (text_width, 64.0),
             "annotation": (text_width, 56.0),
-            "array_cell": (112.0, 80.0),
-            "matrix_cell": (92.0, 68.0),
+            "array_cell": (
+                max(180.0 if detail else 112.0, text_width),
+                110.0 if detail else 80.0,
+            ),
+            "matrix_cell": (
+                max(180.0 if detail else 92.0, text_width),
+                110.0 if detail else 68.0,
+            ),
             "component": (
                 max(220.0, text_width),
                 178.0 if detail else 104.0,
@@ -261,7 +286,24 @@ class HierarchicalLayoutEngine:
             return 84.0, 80.0 + 260.0 * max(0.0, min(1.0, value))
         width, height = sizes.get(item.kind, (max(160.0, text_width), 96.0))
         asset = assets.for_object(item.object_id)
-        if (
+        if item.kind == "semantic_asset" and item.parent_id is not None:
+            # A generated diagram nested inside a concept card is supporting
+            # artwork, not a second full-size canvas. Reserving the root-level
+            # diagram footprint for every nested asset made multi-concept
+            # operators several screens tall and then shrank all labels below
+            # their readable size when fitting the viewport.
+            ratio = max(
+                0.2,
+                min(5.0, float(asset.aspect_ratio or 1.0))
+                if asset is not None
+                else 1.0,
+            )
+            width = min(176.0, 112.0 * sqrt(ratio))
+            height = width / ratio
+            if height < 72.0:
+                height = 72.0
+                width = min(176.0, height * ratio)
+        elif (
             item.kind == "semantic_asset"
             and asset is not None
             and asset.presentation is AssetPresentation.DIAGRAM
@@ -561,6 +603,8 @@ class HierarchicalLayoutEngine:
     ) -> tuple[float, float]:
         """Arrange events on a shared horizontal axis."""
 
+        if len(children) > 5:
+            return self._layout_grid(children, gap)
         width, height = self._layout_linear(children, horizontal=True, gap=gap)
         axis_y = max(0.0, height / 2)
         for child in children:
@@ -576,6 +620,8 @@ class HierarchicalLayoutEngine:
 
         if not children:
             return 0.0, 0.0
+        if len(children) > 5:
+            return self._layout_grid(children, gap)
         width = max(child.width for child in children)
         cursor = 0.0
         for index, child in enumerate(children):

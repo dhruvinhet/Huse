@@ -9,6 +9,7 @@ from app.domain.storyboard import Storyboard, VisualObjectSpec
 from app.domain.visual_document import (
     ObjectLifecycle,
     ObjectState,
+    SemanticStateTransition,
     VisualDocument,
     VisualState,
 )
@@ -32,11 +33,41 @@ class VisualStateTransitionEngine:
         for index, beat in enumerate(storyboard.beats, start=1):
             for operation in beat.operations:
                 self._apply(current, operation)
+            transitions: list[SemanticStateTransition] = []
             for action in beat.semantic_actions:
                 self._check_conditions(current, action.preconditions, "precondition")
+                # Appearing results have an action-local hidden pre-state even
+                # when their persistent object was created with the diagram.
+                # This keeps ordinary storyboard operations unchanged while
+                # giving split/produce/transform a truthful pixel transition.
+                appearing_ids: list[str] = []
+                if action.action == "split":
+                    appearing_ids = list(action.output_ids)
+                elif action.action == "produce":
+                    appearing_ids = list(action.item_ids)
+                elif action.action == "transform":
+                    appearing_ids = [action.target_id]
+                elif action.action == "substitute":
+                    appearing_ids = [action.replacement_id]
+                for object_id in appearing_ids:
+                    if object_id in current:
+                        current[object_id].lifecycle = ObjectLifecycle.HIDDEN
+                    if states and object_id in states[-1].object_states:
+                        prior_item = states[-1].object_states[object_id]
+                        prior_item.lifecycle = ObjectLifecycle.HIDDEN
+                        prior_item.metadata["transition_reserved"] = True
+                previous = deepcopy(current)
                 for operation in self._action_compiler.lower(action, current):
                     self._apply(current, operation)
                 self._check_conditions(current, action.postconditions, "postcondition")
+                transitions.append(SemanticStateTransition(
+                    action_id=action.action_id,
+                    action=action.action,
+                    operator=action.operator.value,
+                    operand_ids=list(action.operand_ids),
+                    previous_object_states=previous,
+                    next_object_states=deepcopy(current),
+                ))
             if beat.shot_plan is not None:
                 self._apply_shot_plan(current, beat)
             state_id = f"{storyboard.document_id}_state_{index:04d}"
@@ -46,6 +77,7 @@ class VisualStateTransitionEngine:
                     beat_id=beat.beat_id,
                     parent_state_id=parent_state_id,
                     object_states=deepcopy(current),
+                    transitions=transitions,
                 )
             )
             parent_state_id = state_id
@@ -160,6 +192,7 @@ class VisualStateTransitionEngine:
         # A recap is a fresh, deliberately sparse view: keep the operator
         # boundary and a few high-importance concept objects, not every past
         # object scaled down to fit.
+        required_non_connectors: set[str] = set()
         if shot_plan.cleanup_policy == "replace" or beat.purpose == "summarize":
             candidates = [
                 (object_id, state)
@@ -168,8 +201,35 @@ class VisualStateTransitionEngine:
                 and state.kind != "connector"
                 and state.lifecycle is not ObjectLifecycle.REMOVED
             ]
+            required_concepts = set(beat.concept_ids)
+            uncovered_concepts = set(required_concepts)
+            remaining_candidates = list(candidates)
+            while uncovered_concepts and remaining_candidates:
+                best = max(
+                    remaining_candidates,
+                    key=lambda item: (
+                        len(
+                            set(item[1].metadata.get("concept_ids", []))
+                            & uncovered_concepts
+                        ) == 1,
+                        len(
+                            set(item[1].metadata.get("concept_ids", []))
+                            & uncovered_concepts
+                        ),
+                        float(item[1].metadata.get("importance", 0.5)),
+                        item[0],
+                    ),
+                )
+                best_ids = set(best[1].metadata.get("concept_ids", []))
+                covered = best_ids & uncovered_concepts
+                if not covered:
+                    break
+                required_non_connectors.add(best[0])
+                uncovered_concepts.difference_update(covered)
+                remaining_candidates.remove(best)
             candidates.sort(
                 key=lambda item: (
+                    item[0] not in required_non_connectors,
                     -float(item[1].metadata.get("importance", 0.5)),
                     item[0],
                 )
@@ -179,6 +239,7 @@ class VisualStateTransitionEngine:
                 object_id
                 for object_id, _state in candidates[: max(1, shot_plan.max_active_objects - len(roots))]
             )
+            focus.update(required_non_connectors)
 
         # A resolved illustration is part of its concept's visual identity.
         # Carry descendants whenever a parent is focused; otherwise shot
@@ -211,7 +272,11 @@ class VisualStateTransitionEngine:
             and states[object_id].kind != "semantic_asset"
             and states[object_id].parent_id is not None
         ]
-        budget = max(1, shot_plan.max_active_objects - len(roots))
+        budget = max(
+            1,
+            shot_plan.max_active_objects - len(roots),
+            len(required_non_connectors),
+        )
         if len(non_connectors) > budget:
             ranked = sorted(
                 non_connectors,
@@ -240,6 +305,19 @@ class VisualStateTransitionEngine:
         )
         connector_budget = max(0, shot_plan.max_active_objects - len(roots) - active_core)
         focus.difference_update(connector_ids[connector_budget:])
+
+        # Keep lifecycle visibility hierarchy-consistent after budget
+        # trimming. Descendants (especially semantic-asset illustrations)
+        # were added before low-priority parents were trimmed, which could
+        # leave the child visible as a tiny synthetic top-level root.
+        changed = True
+        while changed:
+            changed = False
+            for object_id in list(focus):
+                parent_id = states[object_id].parent_id
+                if parent_id is not None and parent_id not in focus:
+                    focus.remove(object_id)
+                    changed = True
 
         for object_id, state in states.items():
             if object_id in focus:
@@ -348,9 +426,13 @@ class VisualStateTransitionEngine:
         elif operation.operation is OperationType.HIDE:
             for target in targets:
                 target.lifecycle = ObjectLifecycle.HIDDEN
+                for descendant in self._descendants(states, target):
+                    descendant.lifecycle = ObjectLifecycle.HIDDEN
         elif operation.operation is OperationType.ERASE:
             for target in targets:
                 target.lifecycle = ObjectLifecycle.REMOVED
+                for descendant in self._descendants(states, target):
+                    descendant.lifecycle = ObjectLifecycle.REMOVED
         elif operation.operation is OperationType.MORPH:
             for target in targets:
                 kind = operation.arguments.get("kind")
@@ -372,6 +454,24 @@ class VisualStateTransitionEngine:
         elif operation.operation is OperationType.UNGROUP:
             for target in targets:
                 target.parent_id = None
+
+    @staticmethod
+    def _descendants(
+        states: dict[str, ObjectState],
+        root: ObjectState,
+    ) -> list[ObjectState]:
+        """Return all existing descendants of a hierarchical object."""
+
+        result: list[ObjectState] = []
+        pending = list(root.child_ids)
+        while pending:
+            object_id = pending.pop()
+            descendant = states.get(object_id)
+            if descendant is None:
+                continue
+            result.append(descendant)
+            pending.extend(descendant.child_ids)
+        return result
 
     def _create(
         self,

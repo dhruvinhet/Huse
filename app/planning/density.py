@@ -65,15 +65,16 @@ class VisualDensityPlanner:
                     VisualObjectSpec.model_validate(item)
                     for item in raw_objects
                 ]
-                # An asset child is a visual treatment of its parent concept,
-                # not another teaching object.  Counting it against the
-                # cognitive-density budget would make adding a grounded SVG
-                # fail lessons that previously passed with the same concepts.
+                # Asset children and connectors are visual support for the
+                # teaching objects, not additional concepts. Counting them
+                # against the cognitive-density budget would make adding a
+                # grounded SVG or relation fail lessons that previously
+                # passed with the same concepts.
                 count += sum(
                     sum(
                         1
                         for item in root.flatten()
-                        if item.kind != "semantic_asset"
+                        if item.kind not in {"semantic_asset", "connector"}
                     )
                     for root in definitions
                 )

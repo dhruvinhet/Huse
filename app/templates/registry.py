@@ -1,6 +1,7 @@
 """Relation-aware BM25 registry for reviewed educational templates."""
 
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from math import log
 import re
@@ -15,6 +16,8 @@ from app.domain.strategy import (
     TemplateMatch,
 )
 from app.planning.graph_semantics import analyze_graph
+from app.domain.pedagogy import PedagogyPlan
+from app.planning.shot_graph import shot_query_graph
 
 
 class SemanticTemplate(Protocol):
@@ -150,7 +153,7 @@ class TemplateRegistry:
         "process": {"transfer", "route", "split", "merge", "transform", "trace"},
         "flow": {"transfer", "route", "split", "merge", "trace"},
         "comparison": {"compare", "substitute", "transform", "trace"},
-        "tree": {"group", "split", "merge", "trace"},
+        "tree": {"route", "group", "split", "merge", "trace"},
         "graph": {"route", "group", "compare", "trace"},
         "array": {"split", "merge", "compare", "substitute", "trace"},
         "matrix": {"compare", "accumulate", "trace", "transform"},
@@ -212,6 +215,11 @@ class TemplateRegistry:
                 if maximum_bm25 > 0
                 else 0.0
             )
+            if (
+                template_id == "tree.v1"
+                and self._binary_tree_required(graph)
+            ):
+                lexical_score = max(0.98, lexical_score)
             if template_id == "concept_set.v1" and structure.peer_collection:
                 lexical_score = max(0.80, lexical_score)
             explicit_relation = (
@@ -298,6 +306,37 @@ class TemplateRegistry:
             if item.score >= 0.45 and item.score >= best - 0.22
         ]
 
+    def match_shots(
+        self,
+        graph: ConceptGraph,
+        pedagogy: PedagogyPlan,
+        concept_groups: list[list[str]],
+        audience: AudienceProfile | None = None,
+    ) -> list[TemplateMatch]:
+        """Match capabilities against each shot's local semantic subgraph."""
+
+        if len(concept_groups) != len(pedagogy.shots):
+            raise ValueError("shot concept groups must align with pedagogy shots")
+        queries = [
+            shot_query_graph(graph, shot, concept_ids)
+            for shot, concept_ids in zip(
+                pedagogy.shots, concept_groups, strict=True
+            )
+        ]
+        with ThreadPoolExecutor(
+            max_workers=min(8, len(queries)),
+            thread_name_prefix="template-shot-match",
+        ) as executor:
+            ranked = list(executor.map(
+                lambda query: self.match(query, audience),
+                queries,
+            ))
+        return [
+            match.model_copy(update={"shot_ids": [shot.shot_id]})
+            for shot, matches in zip(pedagogy.shots, ranked, strict=True)
+            for match in matches
+        ]
+
     @staticmethod
     def _structurally_eligible(
         template_id: str,
@@ -364,6 +403,14 @@ class TemplateRegistry:
 
         return sorted(self._templates)
 
+    def capabilities(self, template_id: str) -> TemplateCapabilities:
+        """Return the reviewed capabilities declared for one template."""
+
+        try:
+            return self._profiles[template_id].capabilities.model_copy(deep=True)
+        except KeyError as exc:
+            raise KeyError(f"unknown template: {template_id}") from exc
+
     def parameter_schema(self, template_id: str) -> dict[str, object]:
         """Return a reviewed operator's explicit local parameter schema."""
 
@@ -410,7 +457,17 @@ class TemplateRegistry:
             minimum_operands = 3
         declared = getattr(template, "capabilities", None)
         if isinstance(declared, TemplateCapabilities):
-            capabilities = declared
+            capabilities = declared.model_copy(update={
+                "relation_types": (
+                    declared.relation_types
+                    or sorted(relations, key=lambda item: item.value)
+                ),
+                "minimum_operands": minimum_operands,
+                "required_parameters": list(dict.fromkeys([
+                    *declared.required_parameters,
+                    *self._REQUIRED_PARAMETERS.get(template.template_id, []),
+                ])),
+            })
         else:
             actions = set(self._KIND_ACTIONS.get(diagram_kind, set()))
             for relation in relations:
@@ -436,6 +493,7 @@ class TemplateRegistry:
                 required_parameters=self._REQUIRED_PARAMETERS.get(
                     template.template_id, []
                 ),
+                action_recipes=self._action_recipes(actions),
             )
         return _TemplateProfile(
             template_id=template.template_id,
@@ -445,6 +503,36 @@ class TemplateRegistry:
             diagram_kind=diagram_kind,
             capabilities=capabilities,
         )
+
+    @staticmethod
+    def _action_recipes(actions: set[str]) -> dict[str, str]:
+        """Declare non-trace action recipes supported by one template family."""
+
+        def choose(*candidates: str) -> str | None:
+            return next((item for item in candidates if item in actions), None)
+
+        recipes = {
+            "demonstrate": choose(
+                "route", "transfer", "split", "compare", "transform", "group"
+            ),
+            "transform": choose(
+                "transform", "transfer", "split", "merge", "produce", "consume"
+            ),
+            "connect": choose("route", "transfer", "group", "merge"),
+            "compare": choose("compare", "substitute", "transform"),
+        }
+        return {purpose: action for purpose, action in recipes.items() if action}
+
+    @staticmethod
+    def _binary_tree_required(graph: ConceptGraph) -> bool:
+        """Recognize an explicit binary-tree minimum visual obligation."""
+
+        text = " ".join([
+            *graph.objectives,
+            *(node.label for node in graph.nodes),
+            *(term for node in graph.nodes for term in node.visual_affordances),
+        ]).casefold().replace("-", " ")
+        return "binary tree" in text or "binary trees" in text
 
     def _bm25_scores(self, query_tokens: list[str]) -> dict[str, float]:
         """Score precomputed metadata with a small in-memory BM25 index."""

@@ -411,6 +411,36 @@ class SemanticFrameRenderer:
             for object_id in event.object_ids:
                 events_by_object.setdefault(object_id, []).append(event)
         previous_ids = set(previous_state.object_states) if previous_state else set()
+        active_semantic = next(
+            (
+                event
+                for event in sorted(events, key=lambda item: item.start_time, reverse=True)
+                if event.parameters.get("operation_type") == "semantic_action"
+                and event.start_time <= timestamp < event.start_time + event.duration
+            ),
+            None,
+        )
+        action_id = (
+            active_semantic.parameters.get("action_id")
+            if active_semantic is not None
+            else None
+        )
+        transition = next(
+            (
+                item for item in state.transitions
+                if item.action_id == action_id
+            ),
+            None,
+        )
+        transition_before = (
+            transition.previous_object_states if transition is not None else {}
+        )
+        ghost_ids = {
+            object_id
+            for object_id, item in transition_before.items()
+            if item.lifecycle not in {ObjectLifecycle.HIDDEN, ObjectLifecycle.REMOVED}
+            and object_id in (active_semantic.object_ids if active_semantic else [])
+        }
 
         opening_leaf_id = next(
             (
@@ -434,7 +464,7 @@ class SemanticFrameRenderer:
             if candidate_state.lifecycle in {
                 ObjectLifecycle.HIDDEN,
                 ObjectLifecycle.REMOVED,
-            }:
+            } and candidate.object_id not in ghost_ids:
                 continue
             is_opening_leaf = (
                 previous_state is None
@@ -451,8 +481,19 @@ class SemanticFrameRenderer:
 
         for node in ordered:
             object_state = state.object_states[node.object_id]
-            if object_state.lifecycle in {ObjectLifecycle.HIDDEN, ObjectLifecycle.REMOVED}:
+            is_transition_ghost = (
+                node.object_id in ghost_ids
+                and object_state.lifecycle
+                in {ObjectLifecycle.HIDDEN, ObjectLifecycle.REMOVED}
+            )
+            if (
+                object_state.lifecycle
+                in {ObjectLifecycle.HIDDEN, ObjectLifecycle.REMOVED}
+                and not is_transition_ghost
+            ):
                 continue
+            if is_transition_ghost:
+                object_state = transition_before[node.object_id]
             if object_state.kind == "connector":
                 source_id = object_state.content.get("source_id")
                 target_id = object_state.content.get("target_id")
@@ -480,8 +521,22 @@ class SemanticFrameRenderer:
                 continue
             final_box = boxes[node.object_id]
             box = final_box
-            if event is not None and event.strategy == "semantic_transfer":
-                box = self._semantic_action_box(final_box, event, progress)
+            if event is not None and event.strategy in {
+                "semantic_transfer", "semantic_split", "semantic_merge",
+                "semantic_group", "semantic_consume", "semantic_produce",
+                "semantic_transform", "semantic_accumulate",
+            }:
+                box = (
+                    self._semantic_transform_box(
+                        final_box, event, progress, node.object_id
+                    )
+                    if event.strategy == "semantic_transform"
+                    else self._semantic_action_box(
+                        final_box, event, progress, node.object_id
+                    )
+                )
+            elif event is not None and event.strategy == "semantic_compare":
+                box = self._semantic_compare_box(final_box, progress)
             elif (
                 event is not None
                 and event.strategy in {"move", "resize", "morph"}
@@ -542,6 +597,13 @@ class SemanticFrameRenderer:
                 progress,
                 is_new,
             )
+            opacity *= self._semantic_action_opacity(
+                node.object_id,
+                event,
+                progress,
+                is_transition_ghost,
+                transition_before,
+            )
             reveal_box = (
                 LayoutBox(
                     x=cached.position[0],
@@ -587,6 +649,10 @@ class SemanticFrameRenderer:
                 )
                 layer.putalpha(alpha)
             canvas.alpha_composite(layer, dest=cached.position)
+        if active_semantic is not None and active_semantic.strategy in {
+            "semantic_route", "semantic_trace"
+        }:
+            self._draw_semantic_route(canvas, active_semantic, timestamp)
         return canvas
 
     @staticmethod
@@ -594,10 +660,19 @@ class SemanticFrameRenderer:
         final_box: LayoutBox,
         event: MotionEvent,
         progress: float,
+        object_id: str | None = None,
     ) -> LayoutBox:
         """Move action pixels along the declared semantic trajectory."""
 
-        raw = event.parameters.get("trajectory")
+        trajectories = event.parameters.get("trajectories")
+        if isinstance(trajectories, dict) and object_id is not None:
+            raw = trajectories.get(object_id)
+            if raw is None:
+                return final_box
+        else:
+            raw = None
+        if raw is None:
+            raw = event.parameters.get("trajectory")
         if not isinstance(raw, list):
             return final_box
         points = [
@@ -622,6 +697,134 @@ class SemanticFrameRenderer:
             "x": current_x - final_box.width / 2,
             "y": current_y - final_box.height / 2,
         })
+
+    @staticmethod
+    def _semantic_action_opacity(
+        object_id: str,
+        event: MotionEvent | None,
+        progress: float,
+        is_ghost: bool,
+        previous: dict[str, ObjectState],
+    ) -> float:
+        """Interpolate appearance/disappearance for typed semantic actions."""
+
+        if event is None:
+            return 1.0
+        action = str(event.parameters.get("semantic_action", ""))
+        trajectories = event.parameters.get("trajectories")
+        moving = isinstance(trajectories, dict) and object_id in trajectories
+        if action in {"merge", "consume"} and is_ghost:
+            return max(0.0, 1.0 - progress)
+        if action in {"split", "produce"} and moving:
+            prior = previous.get(object_id)
+            if prior is None or prior.lifecycle in {
+                ObjectLifecycle.HIDDEN,
+                ObjectLifecycle.REMOVED,
+            }:
+                return progress
+        if action in {"transform", "substitute"}:
+            if is_ghost and moving:
+                return max(0.0, 1.0 - progress)
+            prior = previous.get(object_id)
+            if prior is not None and prior.lifecycle in {
+                ObjectLifecycle.HIDDEN,
+                ObjectLifecycle.REMOVED,
+            }:
+                return progress
+        return 1.0
+
+    @staticmethod
+    def _semantic_transform_box(
+        final_box: LayoutBox,
+        event: MotionEvent,
+        progress: float,
+        object_id: str,
+    ) -> LayoutBox:
+        """Interpolate transform position and dimensions between object kinds."""
+
+        raw = event.parameters.get("geometry_transitions")
+        transition = raw.get(object_id) if isinstance(raw, dict) else None
+        if not isinstance(transition, dict):
+            return final_box
+        start = transition.get("start")
+        end = transition.get("end")
+        if (
+            not isinstance(start, list)
+            or not isinstance(end, list)
+            or len(start) != 4
+            or len(end) != 4
+        ):
+            return final_box
+        value = max(0.0, min(1.0, progress))
+        return LayoutBox(
+            x=float(start[0]) + (float(end[0]) - float(start[0])) * value,
+            y=float(start[1]) + (float(end[1]) - float(start[1])) * value,
+            width=float(start[2]) + (float(end[2]) - float(start[2])) * value,
+            height=float(start[3]) + (float(end[3]) - float(start[3])) * value,
+        )
+
+    @staticmethod
+    def _semantic_compare_box(
+        final_box: LayoutBox,
+        progress: float,
+    ) -> LayoutBox:
+        """Pulse compared operands without changing their semantic positions."""
+
+        pulse = 1.0 - abs(2.0 * max(0.0, min(1.0, progress)) - 1.0)
+        scale = 1.0 + 0.08 * pulse
+        width = final_box.width * scale
+        height = final_box.height * scale
+        return final_box.model_copy(update={
+            "x": final_box.x - (width - final_box.width) / 2,
+            "y": final_box.y - (height - final_box.height) / 2,
+            "width": width,
+            "height": height,
+        })
+
+    @staticmethod
+    def _draw_semantic_route(
+        canvas: Image.Image,
+        event: MotionEvent,
+        timestamp: float,
+    ) -> None:
+        """Draw a visible ordered path and moving visit marker."""
+
+        trajectories = event.parameters.get("trajectories")
+        raw = trajectories.get("__route__") if isinstance(trajectories, dict) else None
+        if not isinstance(raw, list) or len(raw) < 2:
+            return
+        points = [
+            (float(item[0]), float(item[1]))
+            for item in raw
+            if isinstance(item, list) and len(item) == 2
+        ]
+        if len(points) < 2:
+            return
+        progress = SemanticFrameRenderer._event_progress(event, timestamp)
+        segment_progress = progress * (len(points) - 1)
+        segment = min(len(points) - 2, int(segment_progress))
+        local = segment_progress - segment
+        current = (
+            points[segment][0]
+            + (points[segment + 1][0] - points[segment][0]) * local,
+            points[segment][1]
+            + (points[segment + 1][1] - points[segment][1]) * local,
+        )
+        draw = ImageDraw.Draw(canvas)
+        visited = [*points[:segment + 1], current]
+        draw.line(visited, fill=(31, 111, 235, 220), width=8, joint="curve")
+        radius = 12
+        draw.ellipse(
+            (
+                current[0] - radius,
+                current[1] - radius,
+                current[0] + radius,
+                current[1] + radius,
+            ),
+            fill=(255, 191, 0, 255),
+            outline=(20, 20, 25, 255),
+            width=3,
+        )
 
     def _create_object_layer(
         self,

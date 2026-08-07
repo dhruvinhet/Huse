@@ -1,6 +1,6 @@
 """Semantic implementations of the initial educational template set."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.domain.layout import (
     ConstraintStrength,
@@ -15,7 +15,9 @@ from app.templates.operator_templates import (
     OperatorTemplate,
     SemanticOperatorCompiler,
     operator_template,
+    reviewed_operator_capabilities,
 )
+from app.domain.strategy import TemplateCapabilities
 
 
 def _identifier(parameters: dict[str, object], fallback: str) -> str:
@@ -109,6 +111,9 @@ class ArrayTemplate:
 
     template_id: str = "array.v1"
     keywords: frozenset[str] = frozenset({"array", "binary", "search", "sort"})
+    capabilities: TemplateCapabilities = field(
+        default_factory=lambda: reviewed_operator_capabilities(RendererOperator.ARRAY)
+    )
 
     def instantiate(self, parameters: dict[str, object]) -> VisualObjectSpec:
         """Build an array hierarchy."""
@@ -142,6 +147,9 @@ class PipelineTemplate:
     template_id: str = "pipeline.v1"
     keywords: frozenset[str] = frozenset(
         {"pipeline", "flow", "process", "api", "request", "tokenization"}
+    )
+    capabilities: TemplateCapabilities = field(
+        default_factory=lambda: reviewed_operator_capabilities(RendererOperator.FLOW)
     )
 
     def instantiate(self, parameters: dict[str, object]) -> VisualObjectSpec:
@@ -241,6 +249,9 @@ class TreeTemplate:
 
     template_id: str = "tree.v1"
     keywords: frozenset[str] = frozenset({"tree", "dfs", "bfs", "hierarchy"})
+    capabilities: TemplateCapabilities = field(
+        default_factory=lambda: reviewed_operator_capabilities(RendererOperator.TREE)
+    )
 
     def instantiate(self, parameters: dict[str, object]) -> VisualObjectSpec:
         """Build a tree from level-order labels."""
@@ -260,6 +271,25 @@ class TreeTemplate:
             )
             for index, label in enumerate(labels)
         ]
+        node_ids = [item.object_id for item in children]
+        children.extend(
+            VisualObjectSpec(
+                object_id=f"{object_id}_edge_{index:03d}",
+                kind="connector",
+                semantic_role="parent_child_edge",
+                content={
+                    "source_id": node_ids[(index - 1) // 2],
+                    "target_id": node_ids[index],
+                    "relation": "parent_child",
+                    "label": "",
+                },
+                accessibility_label=(
+                    f"Parent-child edge from "
+                    f"{labels[(index - 1) // 2]} to {labels[index]}"
+                ),
+            )
+            for index in range(1, len(node_ids))
+        )
         return _container(
             object_id,
             "tree",
@@ -275,6 +305,9 @@ class GraphTemplate:
 
     template_id: str = "graph.v1"
     keywords: frozenset[str] = frozenset({"graph", "network", "nodes", "edges"})
+    capabilities: TemplateCapabilities = field(
+        default_factory=lambda: reviewed_operator_capabilities(RendererOperator.GRAPH)
+    )
 
     def instantiate(self, parameters: dict[str, object]) -> VisualObjectSpec:
         """Build a graph hierarchy with deterministic default edges."""
@@ -322,6 +355,9 @@ class MatrixTemplate:
 
     template_id: str = "matrix.v1"
     keywords: frozenset[str] = frozenset({"matrix", "attention", "grid"})
+    capabilities: TemplateCapabilities = field(
+        default_factory=lambda: reviewed_operator_capabilities(RendererOperator.MATRIX)
+    )
 
     def instantiate(self, parameters: dict[str, object]) -> VisualObjectSpec:
         """Build a matrix hierarchy."""
@@ -358,6 +394,11 @@ class ProbabilityDistributionTemplate:
     template_id: str = "probability_distribution.v1"
     keywords: frozenset[str] = frozenset(
         {"probability", "distribution", "softmax", "histogram"}
+    )
+    capabilities: TemplateCapabilities = field(
+        default_factory=lambda: reviewed_operator_capabilities(
+            RendererOperator.BAR_CHART
+        )
     )
 
     def instantiate(self, parameters: dict[str, object]) -> VisualObjectSpec:
@@ -398,6 +439,11 @@ class TransformerBlockTemplate:
     template_id: str = "transformer_block.v1"
     keywords: frozenset[str] = frozenset(
         {"transformer", "attention", "embedding", "llm", "language"}
+    )
+    capabilities: TemplateCapabilities = field(
+        default_factory=lambda: reviewed_operator_capabilities(
+            RendererOperator.NEURAL_NETWORK
+        )
     )
 
     def instantiate(self, parameters: dict[str, object]) -> VisualObjectSpec:

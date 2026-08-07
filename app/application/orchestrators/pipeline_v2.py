@@ -321,6 +321,8 @@ class V2PipelineRunner:
                         self._templates,
                         pedagogy,
                         request.target_duration,
+                        request.audience,
+                        True,
                     ),
                 )
             if template_program is not None:

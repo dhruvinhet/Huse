@@ -7,7 +7,7 @@ from app.domain.quality import (
     QualityFinding,
     QualityReport,
 )
-from app.domain.visual_document import VisualDocument
+from app.domain.visual_document import ObjectLifecycle, VisualDocument
 
 
 class VisualQualityEvaluator:
@@ -119,7 +119,12 @@ class VisualQualityEvaluator:
                     })
                     findings.append(QualityFinding(
                         code="connector_crossing",
-                        severity=FindingSeverity.ERROR,
+                        # This preflight uses endpoint centerlines, while the
+                        # renderer uses boundary anchors and obstacle-aware
+                        # orthogonal routes. Preserve the signal for review,
+                        # but do not trigger an impossible scale-only repair
+                        # for geometry that is rerouted during rendering.
+                        severity=FindingSeverity.WARNING,
                         artifact_id=artifact_id,
                         message=(
                             f"{len(crossings)} connector pairs geometrically cross "
@@ -200,7 +205,11 @@ class VisualQualityEvaluator:
             tuple[str, str, str, tuple[float, float], tuple[float, float]]
         ] = []
         for object_id, state in object_states.items():
-            if getattr(state, "kind", None) != "connector":
+            if (
+                getattr(state, "kind", None) != "connector"
+                or getattr(state, "lifecycle", None)
+                in {ObjectLifecycle.HIDDEN, ObjectLifecycle.REMOVED}
+            ):
                 continue
             content = getattr(state, "content", {})
             source_id = content.get("source_id")
